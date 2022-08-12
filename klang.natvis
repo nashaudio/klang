@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+	<Type Name = "Klang::signal">
+		<DisplayString>{value,g}</DisplayString>
+	</Type>
+
+	<Type Name = "Klang::Input">
+		<DisplayString>[{in,g}]</DisplayString>
+	</Type>
+
+	<Type Name = "Klang::Output">
+		<DisplayString>[{out,g}]</DisplayString>
+	</Type>
+
+	<Type Name = "Klang::Modifier">
+		<DisplayString>[in: {in,g} out: {out,g}]</DisplayString>
+	</Type>
+
+	<Type Name = "Klang::Delay&lt;*&gt;">
+		<DisplayString>{time,g} [in: {in,g} out: {out,g}]</DisplayString>
+	</Type>
+	
+	<Type Name="Klang::Oscillator">
+		<DisplayString>{frequency,g}hz [out: {out,g}]</DisplayString>
+		<!--<Expand>
+			<Item Name="[frequency]">frequency</Item>
+			<Item Name="[output]">out</Item>
+		</Expand>-->
+	</Type>
+</AutoVisualizer>
