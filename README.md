@@ -23,7 +23,7 @@ To use klang, simply include the **klang.h** header file in your C++ project.
 
 Audio objects are then accessible using the <code>klang</code> namespace (e.g. Effect, Sine). klang tries to use plain language to describe objects, so the namespace is used to avoid conflict with similar terms in other APIs or code. If this is not needed, specify <code>using namespace klang;</code> 
 
-The core data type in klang is <code>signal</code>, an extension of the basic C type <code>float</code> with additional audio and streaming functionality. In many cases, signals can be used interably with floats, facilitating integration of klang with other C++ code, while enabling signal-flow expressions, such as in the following auto-wah effect...
+The core data type in klang is <code>signal</code>, an extension of the basic C type <code>float</code> with additional audio and streaming functionality. In many cases, signals can be used interoperably with floats, facilitating integration of klang with other C++ code, while enabling signal-flow expressions, such as in the following auto-wah effect...
 
 ```
 // signal in, out;
