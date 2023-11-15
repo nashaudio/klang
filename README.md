@@ -97,14 +97,14 @@ This object defines the processing for a single synth note that can then be used
   klang::Buffer buffer = { pfBuffer, numSamples };
   note.process(buffer);
 ```
-For ready-made AU/VST compatible C++ templates for Xcode and Visual Studio, see the github.com/myeffect and github.com/mysynth repositories.
-rapide plugins also support a pure klang live coding mode.
+For ready-made AU/VST compatible C++ templates for Xcode and Visual Studio, see the github.com/nashnet/myeffect and github.com/nashnet/mysynth repositories.
+rapIDE plugins also support a pure klang live coding mode.
 
-## Usage in the **rapide** plugin
+## Usage in the **rapIDE** plugin
 
-The rapide plugin features native support for klang, providing a pure klang mode for synthesiser and effect plugin development.
+The rapIDE plugin features native support for klang, providing a pure klang mode for synthesiser and effect plugin development, and will ultimately support generating/exporting of VS/Xcode/JUCE projects.
 
-**rapide** (github.com/rapide) is a rapid audio prototyping (RAP) integrated development environment (IDE): a state-of-the-art C++ audio development environment... inside a DAW plugin, enabling the live C++ development of realtime audio processes, where you can open, edit, and recompile the code of the running plugin, within the DAW itself plugin's own UI and without having to stop and reload it. 
+**rapide** (github.com/nashnet/rapide - coming soon) is a rapid audio prototyping (RAP) integrated development environment (IDE): a state-of-the-art C++ audio development environment... inside a DAW plugin, enabling the live C++ development of realtime audio processes, where you can open, edit, and recompile the code of the running plugin, within the DAW itself plugin's own UI and without having to stop and reload it. 
 
 ## More information
 
