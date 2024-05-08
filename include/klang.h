@@ -854,23 +854,109 @@ namespace klang {
 #define GRAPH_SIZE 4096
 #endif
 
+	#define F(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
+
+	template <typename TYPE>
+	struct Result {
+		TYPE* y = nullptr;
+		int i = 0;
+		TYPE sum = 0;
+
+		Result(TYPE* array, int index) : y(&array[index]), i(index) { }
+
+		TYPE& operator[](int index) {
+			return *(y + index);
+		}
+
+		operator TYPE const () { return *y; }
+
+		Result& operator=(const TYPE& in) {
+			*y = in;
+			return *this;
+		}
+
+		TYPE& operator++(int) { i++; return *++y; }
+	};
+
+	template<typename TYPE, int SIZE>
+	struct Table : public Array<TYPE, SIZE> {
+		typedef Array<TYPE, SIZE> Array;
+		typedef Result<TYPE> Result;
+
+		using Array::add;
+
+		// single argument
+		Table(TYPE(*function)(TYPE)) {
+			for (int x = 0; x < SIZE; x++)
+				add(function(x));
+		}
+
+		// double argument
+		Table(void(*function)(TYPE, TYPE), TYPE arg) {
+			Array::count = SIZE;
+			for (int x = 0; x < SIZE; x++)
+				Array::items[x] = function(x, arg);
+		}
+
+		// single argument (enhanced)
+		Table(void(*function)(TYPE x, Result& y)) {
+			Array::count = SIZE;
+			Result y(Array::items, 0);
+			for (int x = 0; x < SIZE; x++) {
+				function((TYPE)x, y);
+				y.sum += Array::items[x];
+				y++;
+			}
+		}
+
+		//Table(void(*function)(TYPE, TYPE&, TYPE&, TYPE&)) {
+		//	Array::count = SIZE;
+		//	TYPE sum = 0, last = 0;
+		//	for (int x = 0; x < SIZE; x++) {
+		//		function(x, Array::items[x], sum, last);
+		//		sum += last;
+		//	}
+		//}
+
+		Table(std::initializer_list<TYPE> values) {
+			for (TYPE value : values)
+				add(value);
+		}
+	};
+
 	struct Graph {
 		struct Point { 
 			double x, y; 
 			bool valid() const { return !isnan(x) && !isinf(x) && !isnan(y); } // NB: y can be +/- inf
 		};
 
-		struct Series : public Array<Point, GRAPH_SIZE + 1> {
+		struct Axis;
+
+		struct Series : public Array<Point, GRAPH_SIZE+1> {
+			void* function = nullptr;
 			using Array::add;
 			void add(double y) {
-				Array::add({ (double)Array::size(), y });
+				add({ (double)Array::size(), y });
 			}
-			void* function = nullptr;
+
+			template<class TYPE>
+			void plot(TYPE f, const Axis& x_axis) {
+				if (function != (void*)f) {
+					clear();
+					function = (void*)f;
+					double x = 0;
+					const double dx = x_axis.range() / GRAPH_SIZE;
+					for (int i = 0; i <= GRAPH_SIZE; i++) {
+						x = x_axis.min + i * dx;
+						add({ x, (double)f(x) });
+					}
+				}
+			}
 		};
 
 		struct Axis {
 			double min = 0, max = 0;
-			bool valid() const { return min != max; }
+			bool valid() const { return max != min; }
 			double range() const { return max - min; }
 			bool contains(double value) const { return value >= min && value <= max; }
 			void clear() { min = max = 0; }
@@ -880,12 +966,17 @@ namespace klang {
 				int points = 0;
 				for (unsigned int p = 0; p < series.count; p++) {
 					const Point& pt = series[p];
-					if (pt.valid() && !isinf(pt.y)) {
+					if (pt.valid() && !isinf(pt.*axis)) {
 						if (!points || pt.*axis < min) min = pt.*axis;
 						if (!points || pt.*axis > max) max = pt.*axis;
 						points++;
 					}
 				}
+				if (abs(max) < 0.0000000001) max = 0;
+				if (abs(min) < 0.0000000001) min = 0;
+				if (abs(max) > 1000000000.0) max = 0;
+				if (abs(min) > 1000000000.0) min = 0;
+				if (min > max) max = min = 0;
 			}
 		};
 
@@ -958,16 +1049,7 @@ namespace klang {
 				dirty = true;
 				if (!axes.x.valid())
 					axes.x = { -1, 1 };
-				const double dx = axes.x.range() / GRAPH_SIZE;
-				double x = axes.x.min;
-				if (series->function != (void*)function) {
-					series->clear();
-					series->function = (void*)function;
-					for (int i = 0; i <= GRAPH_SIZE; i++) {
-						x = axes.x.min + i * dx;
-						series->add({ x, (double)function(x) });
-					}
-				}
+				series->plot(function, axes.x);
 			}
 		}
 
@@ -985,16 +1067,6 @@ namespace klang {
 			return *this;
 		}
 
-		Graph& operator=(std::initializer_list<double> values) {
-			clear(); return operator+=(values);
-		}
-
-		Graph& operator+=(std::initializer_list<double> values) {
-			for (const auto& value : values)
-				add(value);
-			return *this;
-		}
-
 		Graph& operator=(std::initializer_list<Point> values) {
 			clear(); return operator+=(values);
 		}
@@ -1004,6 +1076,16 @@ namespace klang {
 				add(value);
 			return *this;
 		}
+
+		//Graph& operator=(std::initializer_list<double> values) {
+		//	clear(); return operator+=(values);
+		//}
+
+		//Graph& operator+=(std::initializer_list<double> values) {
+		//	for (const auto& value : values)
+		//		add(value);
+		//	return *this;
+		//}
 
 		// returns the user-defined axes
 		const Axes& getAxes() const { return axes; }
@@ -1316,9 +1398,13 @@ namespace klang {
 		}
 	};
 
+
+
 	class Envelope : public Generator {
 		using Generator::set;
-		class Ramp : public Generator {
+
+	public:
+		struct Ramp : public Generator {
 			float target;
 			float rate;
 			bool active = false;
@@ -1338,22 +1424,26 @@ namespace klang {
 				return active;
 			}
 
-			void setTarget(float target) {
+			virtual void setTarget(float target) {
 				Ramp::target = target;
 				active = (out != target);
-				//if (active)
-				//	rate = abs(rate) * (target > output ? 1.f : -1.f);
 			}
-			void setValue(float value) {
+			virtual void setValue(float value) {
 				out = value;
 				Ramp::target = value;
 				active = false;
 			}
-			void setRate(float rate) { Ramp::rate = rate; }
-			void setTime(float time) { Ramp::rate = time ? 1.f / (time * fs) : 0; }
+			virtual void setRate(float rate) { Ramp::rate = rate; }
+			virtual void setTime(float time) { Ramp::rate = time ? 1.f / (time * fs) : 0; }
 
-			signal operator++(int) {
-				signal output = out;
+			virtual signal operator++(int) = 0;
+
+			void process() override { /* do nothing -> only process on ++ */ }
+		};
+
+		struct Linear : public Ramp {
+			signal operator++(int) override {
+				const signal output = out;
 
 				if (active) {
 					if (target > out) {
@@ -1362,7 +1452,8 @@ namespace klang {
 							out = target;
 							active = false;
 						}
-					} else {
+					}
+					else {
 						out -= rate;
 						if (out <= target) {
 							out = target;
@@ -1377,7 +1468,6 @@ namespace klang {
 			void process() override { /* do nothing -> only process on ++ */ }
 		};
 
-	public:
 		enum Stage { Sustain, Release, Off };
 
 		struct Point {
@@ -1423,16 +1513,20 @@ namespace klang {
 			int end;
 		};
 
-		Envelope() {
+		Envelope() : ramp(new Linear()) {
 			set(Points(0.0, 1.0));
 		}
 
-		Envelope(const Points& points) {
+		Envelope(const Points& points) : ramp(new Linear()) {
 			set(points);
 		}
 
-		Envelope(std::initializer_list<Point> points) {
+		Envelope(std::initializer_list<Point> points) : ramp(new Linear()) {
 			set(points);
+		}
+
+		Envelope(const Envelope& in) : ramp(new Linear()) {
+			set(in.points);
 		}
 
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
@@ -1455,6 +1549,15 @@ namespace klang {
 			initialise();
 		}
 
+		void sequence() {
+			float time = 0.f;
+			for(Point& point : points) {
+				const float delta = point.x;
+				time += delta + 0.00001f;
+				point.x = time;
+			}
+		}
+
 		void setLoop(int startPoint, int endPoint){
 			if(startPoint >= 0 && endPoint < points.size())
 				loop.set(startPoint, endPoint);
@@ -1473,8 +1576,8 @@ namespace klang {
         
 		void release(float time){
 			stage = Release;
-			ramp.setTime(time);
-			ramp.setTarget(0.f);
+			ramp->setTime(time);
+			ramp->setTarget(0.f);
 		}
 
 		bool finished() const {
@@ -1487,11 +1590,11 @@ namespace klang {
 			loop.reset();
 			stage = Sustain;
 			if(points.size()){
-				ramp.setValue(points[0].y);
+				ramp->setValue(points[0].y);
 				if(points.size() > 1)
 					setTarget(points[1], points[0].x);
 			}else{
-				ramp.setValue(1.0);
+				ramp->setValue(1.0);
 			}
 		}
         
@@ -1512,26 +1615,26 @@ namespace klang {
         
 		void setTarget(Point& point, float time = 0.0){
 			this->time = time;
-			ramp.setTarget(point.y);
-			ramp.setRate(fabsf(point.y - ramp.out) / ((point.x - time) * fs));
+			ramp->setTarget(point.y);
+			ramp->setRate(fabsf(point.y - ramp->out) / ((point.x - time) * fs));
 		}
         
 		signal& operator++(int){ 
-			out = ramp++;
+			out = (*ramp)++;
             
 			switch(stage){
 			case Sustain:
 				time += timeInc;
-				if (!ramp.isActive()) { // envelop segment end reached
+				if (!ramp->isActive()) { // envelop segment end reached
 					if (loop.isActive() && (point + 1) >= loop.end) {
 						point = loop.start;
-						ramp.setValue(points[point].y);
+						ramp->setValue(points[point].y);
 						if (loop.start != loop.end)
 							setTarget(points[point + 1], points[point].x);
 					} else if ((point + 1) < points.size()) {
 						if (time >= points[point + 1].x) { // reached target point
 							point++;
-							ramp.setValue(points[point].y); // make sure exact value is set
+							ramp->setValue(points[point].y); // make sure exact value is set
 
 							if ((point + 1) < points.size()) // new target point?
 								setTarget(points[point + 1], points[point].x);
@@ -1552,11 +1655,15 @@ namespace klang {
 		}
 
 		void process() override {
-			out = ramp;
+			out = *ramp;
 		}
         
 		const Point& operator[](int point) const {
 			return points[point];
+		}
+
+		void set(Ramp* ramp) {
+			Envelope::ramp = std::shared_ptr<Ramp>(ramp);
 		}
         
 	protected:
@@ -1567,7 +1674,7 @@ namespace klang {
 		float time, timeInc;
 		Stage stage;
 
-		Ramp ramp;
+		std::shared_ptr<Ramp> ramp;
 	};
 
 	struct ADSR : public Envelope {
@@ -1611,12 +1718,12 @@ namespace klang {
 		Operator& operator()(param f, relative phase) { OSCILLATOR::set(f, phase); return *this; }
 		Operator& operator()(relative phase) { OSCILLATOR::set(phase); return *this; }
 
-		Operator& operator=(const Envelope::Points& points) {
+		virtual Operator& operator=(const Envelope::Points& points) {
 			env = points;
 			return *this;
 		}
 
-		Operator& operator=(const Envelope& points) {
+		virtual Operator& operator=(const Envelope& points) {
 			env = points;
 			return *this;
 		}
@@ -2149,10 +2256,6 @@ namespace klang {
 				return (((-0.00018542f * x2 + 0.0083143f) * x2 - 0.16666f) * x2 + 1.0f) * x;
 			}
 
-			inline static float fastmodf(float x) {
-				return x - twoPi * floorf(x * twoPiInv);
-			}
-
 			// fast sine (based on V2/Farbrausch; using polysin)
 			inline static float fastsin(float x)
 			{
@@ -2171,7 +2274,7 @@ namespace klang {
 				return polysin(x);
 			}
 
-			// fast sine (based on V2/Farbrausch; using polysin)
+			// fast sine (using polysin and integer math)
 			inline static float fastsinp(unsigned int p)
 			{
 				// Range reduction to [0, 2pi]

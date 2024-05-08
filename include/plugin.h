@@ -91,6 +91,7 @@ extern "C" {                                                                    
         try {                                                                                                               \
             if(buffer) *size = ((DSP::Effect*)effect)->getDebugAudio(buffer);                                               \
             if(graph) ((DSP::Effect*)effect)->getDebugGraph(graph);                                                         \
+            if(console) ((DSP::Effect*)effect)->getDebugConsole(console);                                                   \
             return 0;                                                                                                       \
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \
@@ -122,6 +123,7 @@ extern "C" {                                                                    
         try {                                                                                                               \
             if(buffer) *size = ((DSP::Synth*)synth)->getDebugAudio(buffer);                                                 \
             if(graph) ((DSP::Synth*)synth)->getDebugGraph(graph);                                                           \
+            if(console) ((DSP::Effect*)effect)->getDebugConsole(console);                                                   \
             return 0;                                                                                                       \
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \

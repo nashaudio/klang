@@ -1,8 +1,27 @@
 
 #include <klang.h>
-#include <klang/tests.h>
+//#include <klang/tests.h>
 
 using namespace klang::optimised;
+
+
+double myFunction1(double x){ return sin(x * 2 * pi / 128); }
+//const Table<double, 128> sin_lookup1 = myFunction1;
+
+void myFunction2(double x, double& y){ y = sin(x * 2 * pi / 128); }
+//const Table<double, 128> sin_lookup2 = myFunction2;
+
+//#define FUNCTION(type) (void(*)(type, type&))[](type x, type& y)
+//#define TABLE(name, type, size) Table<type, size> name = FUNCTION(type)
+//#define F(type) (void(*)(type, type&))[](type x, type& y)/
+
+const Table<double, 128> sin_lookup = F(double) { y = sin(x * 2 * pi / 128); };
+
+//const TABLE(sin_lookup2, double, 128) { y = sin(x * 2 * pi / 128); };
+
+const Table<double, 4> val_lookup = { 0, 1, 2, 3 };
+
+
 
 struct MySynth : Synth {
 
@@ -15,6 +34,11 @@ struct MySynth : Synth {
 
 		// Note On
 		event on(Pitch p, Velocity v) { 		
+			graph.clear();
+			for(int x=0; x<128; x++){
+				graph.add(sin_lookup[x]);
+			}
+		
 			const param fc = p > Type::Frequency;
 			const Frequency fd = fc * controls[0];
 			
@@ -50,8 +74,7 @@ struct MySynth : Synth {
 	// Initialise plugin (called once at startup)
 	MySynth() {		
 		//test::run();
-		//debug.console = "Test";
-	
+		
 		controls = { 
 			// UI controls and parameters
 			Dial("Mod Freq", 0.001, 10.0, 1.0),
