@@ -13,7 +13,7 @@ struct Operator : public klang::Operator<Sine> {
 	struct Ramp : public Envelope::Linear {
 		
 		static inline float nonlinear(float x){
-			return x * x * x * x * 0.1;
+			return x * x * x * x;
 		}
 	
 		signal operator++(int) override {
@@ -33,16 +33,16 @@ struct Operator : public klang::Operator<Sine> {
 
 struct Patch {
 	struct Op {
-		struct Osc { int MODE; double FREQ; int DETUNE; } OSC = { Ratio, 1.f, 0 };
-		struct Env { double RATE, LEVEL; } EG[4] = { 0 };
-		double BREAKPOINT;
-		double LEFTCURVE;
-		double LEFTDEPTH;
-		double RIGHTCURVE;
-		double RIGHTDEPTH;
-		double RATESCALING;
-		double OUTPUTLEVEL = 0;
-		double KEYVELOCITY;
+		struct Osc { int MODE; float FREQ; int DETUNE; } OSC = { Ratio, 1.f, 0 };
+		struct Env { float RATE, LEVEL; } EG[4] = { 0 };
+		float BREAKPOINT;
+		float LEFTCURVE;
+		float LEFTDEPTH;
+		float RIGHTCURVE;
+		float RIGHTDEPTH;
+		float RATESCALING;
+		float OUTPUTLEVEL = 0;
+		float KEYVELOCITY;
 		// TODO: other OP stuff
 	} OP[6];
 	// TODO: GLOBAL stuff		
@@ -110,12 +110,12 @@ struct {
 } Duration;
 
 struct {
-	const Table<double, 128> Level = F(double) { 	
-		constexpr double level[] = { 0, 5, 9, 13, 17, 20, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 42, 43, 45, 46 };
+	const Table<float, 128> Level = F(float) { 	
+		constexpr float level[] = { 0, 5, 9, 13, 17, 20, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 42, 43, 45, 46 };
 		y = (x < 20 ? level[(int)x] : 48 + (x - 20));
 	};
 
-	double operator()(int level) const {
+	float operator()(int level) const {
 //		const double scale = 20.0 * (log(2.0) / log(10.0)) / 8.0;
 //		return Amplitude(Gain(scale * (Level[level] - 128.0)));
 	
@@ -150,10 +150,10 @@ struct DX7 : Synth {
 			for(int o=0; o<6; o++){
 				
 				const auto& OSC = OP[o].OSC;
-				op[o].set((OSC.MODE == Ratio ? (double)fc * OSC.FREQ : OSC.FREQ) + DX::Detune(OSC.DETUNE) / 2, 0);
+				op[o].set((OSC.MODE == Ratio ? (float)fc * OSC.FREQ : OSC.FREQ) + DX::Detune(OSC.DETUNE) / 2, 0);
 				op[o].amp = DX::Level(OP[o].OUTPUTLEVEL);
 				const auto* EG = OP[o].EG;
-				op[o] = 							 { { 0, std::max(0.01,DX::Level(EG[3].LEVEL)) },
+				op[o] = 							{ { 0, std::max(0.01f,DX::Level(EG[3].LEVEL)) },
 					{ DX::Duration(EG[0].RATE, EG[3].LEVEL, EG[0].LEVEL), DX::Level(EG[0].LEVEL) },
 					{ DX::Duration(EG[1].RATE, EG[0].LEVEL, EG[1].LEVEL), DX::Level(EG[1].LEVEL) },
 					{ DX::Duration(EG[2].RATE, EG[1].LEVEL, EG[2].LEVEL), DX::Level(EG[2].LEVEL) },
@@ -180,10 +180,10 @@ struct DX7 : Synth {
 		// Apply processing (called once per sample)
 		void process() {						
 
-			(op[1] >> op[0]) + (op[3] >> op[2]) + (op[5] >> op[4]) >> out;
+			(op[1] >> op[0]) + (op[3] >> op[2]) /*+ (op[5] >> op[4])*/ >> out;
 			//(op[1] >> op[0]) >> out;
 								
-			out *= adsr++ * 0.5;
+			out *= adsr++ * 0.1f;
 			if(adsr.finished())
 				stop();
 		}
