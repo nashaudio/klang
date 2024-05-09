@@ -1398,50 +1398,64 @@ namespace klang {
 		}
 	};
 
-
-
+	// Models a changing value (e.g. amplitude) over time (in seconds) using breakpoints (time, value)
 	class Envelope : public Generator {
 		using Generator::set;
 
 	public:
+		// Abstract envelope ramp type (override to support different point-to-point trajectories)
 		struct Ramp : public Generator {
 			float target;
 			float rate;
 			bool active = false;
 		public:
 
+			// Create a null ramp (full signal)
 			Ramp(float value = 1.f) {
 				setValue(value);
 			}
 
+			// Create a ramp from start to target over time (in seconds)
 			Ramp(float start, float target, float time) {
 				setValue(start);
 				setTarget(target);
 				setTime(time);
 			}
 
+			// Is ramp currently processing (ramping)?
 			bool isActive() const {
 				return active;
 			}
 
+			// Set a new target (retains rate)
 			virtual void setTarget(float target) {
 				Ramp::target = target;
 				active = (out != target);
 			}
+
+			// Immediately jump to value (disables ramp)
 			virtual void setValue(float value) {
 				out = value;
 				Ramp::target = value;
 				active = false;
 			}
+
+			// Set rate of change (per sample)
 			virtual void setRate(float rate) { Ramp::rate = rate; }
+
+			// Set rate of change (by duration)
 			virtual void setTime(float time) { Ramp::rate = time ? 1.f / (time * fs) : 0; }
 
+			// Return the current output and advanced the ramp
 			virtual signal operator++(int) = 0;
 
 			void process() override { /* do nothing -> only process on ++ */ }
 		};
 
+		// Default (linear) ramp implementation
 		struct Linear : public Ramp {
+
+			// Return the current output and process the next
 			signal operator++(int) override {
 				const signal output = out;
 
@@ -1464,17 +1478,17 @@ namespace klang {
 
 				return output;
 			}
-
-			void process() override { /* do nothing -> only process on ++ */ }
 		};
 
 		enum Stage { Sustain, Release, Off };
 
+		// Envelope point type
 		struct Point {
 			float x, y;
 			Point(double x = 0, double y = 0) : x(float(x)), y(float(y)) { }
 		};
 
+		// Linked-list of points (for inline initialisation)
 		struct Points : public Point {
 			Points(float x, float y) {
 				Point::x = x;
@@ -1501,6 +1515,7 @@ namespace klang {
 			Points* next;
 		};
 
+		// Envelope loop (between two points)
 		struct Loop {
 			Loop(int from = -1, int to = -1) : start(from), end(to) {}
 
@@ -1513,30 +1528,31 @@ namespace klang {
 			int end;
 		};
 
+		// Default Envelope (full signal)
 		Envelope() : ramp(new Linear()) {
-			set(Points(0.0, 1.0));
+			set(Points(0.f, 1.f));
 		}
 
-		Envelope(const Points& points) : ramp(new Linear()) {
-			set(points);
-		}
+		// Creates a new envelope from a list of points, e.g. Envelope env = Envelope::Points(0,1)(1,0);
+		Envelope(const Points& points) : ramp(new Linear()) {					set(points);	}
 
-		Envelope(std::initializer_list<Point> points) : ramp(new Linear()) {
-			set(points);
-		}
+		// Creates a new envelope from a list of points, e.g. Envelope env = { { 0,1 }, { 1,0 } };
+		Envelope(std::initializer_list<Point> points) : ramp(new Linear()) {	set(points);	}
 
-		Envelope(const Envelope& in) : ramp(new Linear()) {
-			set(in.points);
-		}
+		// Creates a copy of an envelope from another envelope
+		Envelope(const Envelope& in) : ramp(new Linear()) {						set(in.points); }
 
+		// Checks if the envelope is at a specified stage (Sustain, Release, Off)
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
 		bool operator!=(Stage stage) const { return Envelope::stage != stage; }
 
+		// Sets the envelope based on an array of points
 		void set(const std::vector<Point>& points) {
 			Envelope::points = points;
 			initialise();
 		}
 
+		// Sets the envelope from a list of points, e.g. env.set( Envelope::Points(0,1)(1,0) );
 		void set(const Points& point){
 			points.clear();
             
@@ -1549,6 +1565,7 @@ namespace klang {
 			initialise();
 		}
 
+		// Converts envelope points based on relative time to absolute time
 		void sequence() {
 			float time = 0.f;
 			for(Point& point : points) {
@@ -1558,52 +1575,64 @@ namespace klang {
 			}
 		}
 
+		// Sets an envelope loop between two points
 		void setLoop(int startPoint, int endPoint){
 			if(startPoint >= 0 && endPoint < points.size())
 				loop.set(startPoint, endPoint);
 		}
         
+		// Resets the envelope loop
 		void resetLoop(){
 			loop.reset();
 			if(stage == Sustain && (point+1) < points.size())
 				setTarget(points[point+1], points[point].x);
 		}
         
+		// Sets the current stage of the envelope
 		void setStage(Stage stage){ this->stage = stage; }
+
+		// Returns the current stage of the envelope
 		const Stage getStage() const { return stage; }
         
+		// Returns the total length of the envelope (ignoring loops)
 		float getLength() const { return points.size() ? points[points.size() - 1].x : 0.f; }
         
+		// Trigger the release of the envelope
 		void release(float time){
 			stage = Release;
 			ramp->setTime(time);
 			ramp->setTarget(0.f);
 		}
 
+		// Returns true if the envelope has finished (is off)
 		bool finished() const {
 			return getStage() == Stage::Off;
 		}
         
+		// Prepare envelope to (re)start
 		void initialise(){
 			point = 0;
 			timeInc = 1.0f / fs;
 			loop.reset();
 			stage = Sustain;
 			if(points.size()){
+				out = points[0].y;
 				ramp->setValue(points[0].y);
 				if(points.size() > 1)
 					setTarget(points[1], points[0].x);
 			}else{
-				ramp->setValue(1.0);
+				out = 1.0f;
+				ramp->setValue(1.0f);
 			}
 		}
         
-		void resize(int samples){
-			float length = getLength();
-			if(length == 0.0)
+		// Scales the envelope duration to specified length 
+		void resize(float length){
+			const float old_length = getLength();
+			if(old_length == 0.0)
 				return;
             
-			const float multiplier = samples / (fs * length);
+			const float multiplier = length / (fs * old_length);
 			std::vector<Point>::iterator point = points.begin();
 			while(point != points.end()){
 				point->x *= multiplier;
@@ -1613,12 +1642,14 @@ namespace klang {
 			initialise();
 		}
         
+		// Set the current envelope target
 		void setTarget(Point& point, float time = 0.0){
 			this->time = time;
 			ramp->setTarget(point.y);
 			ramp->setRate(fabsf(point.y - ramp->out) / ((point.x - time) * fs));
 		}
         
+		// Returns the output of the envelope and advances the envelope.
 		signal& operator++(int){ 
 			out = (*ramp)++;
             
@@ -1654,14 +1685,16 @@ namespace klang {
 			return out;
 		}
 
-		void process() override {
-			out = *ramp;
+		void process() override { /* do nothing -> only process on ++ */
+			//out = *ramp;
 		}
         
+		// Retrieve a specified envelope point (read-only)
 		const Point& operator[](int point) const {
 			return points[point];
 		}
 
+		// Set the Ramp class (default: Envelope::Linear)
 		void set(Ramp* ramp) {
 			Envelope::ramp = std::shared_ptr<Ramp>(ramp);
 		}
@@ -1711,7 +1744,6 @@ namespace klang {
 	template<class OSCILLATOR>
 	struct Operator : public OSCILLATOR, public Input {
 		Envelope env;
-		param ratio = 1.f;
 		Amplitude amp = 1.f;
 
 		Operator& operator()(param f) { OSCILLATOR::set(f); return *this; }
@@ -1728,20 +1760,15 @@ namespace klang {
 			return *this;
 		}
 
-		//Operator& operator=(Oscillator& in) {
-		//	OSCILLATOR::operator=(in);
-		//	return *this;
-		//}
-
-		Operator& operator*(float ratio) {
-			Operator::ratio = ratio;
+		Operator& operator*(float amp) {
+			Operator::amp = amp;
 			return *this;
 		}
 
 		void process() override {
 			OSCILLATOR::set(+in);
 			OSCILLATOR::process();
-			OSCILLATOR::out *= env++ * ratio * amp;
+			OSCILLATOR::out *= env++ * amp;
 		}
 	};
 
