@@ -1363,6 +1363,7 @@ namespace klang {
 		}
 
 		virtual void set(relative phase) override {
+			
 			offset = phase * float(size);
 		}
 
@@ -1372,7 +1373,7 @@ namespace klang {
 		}
 
 		void process() override {
-			position += increment;// { increment, size };
+			position += { increment, size };
 			out = buffer[position + offset /*klang::increment(offset, size)*/];
 		}
 	};
