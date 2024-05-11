@@ -27,12 +27,12 @@ struct MySynth : Synth {
 		// Apply processing (called once per sample)
 		void process() {						
 								
-			out = sine * adsr++;
+			out = sine * adsr++ * 0.1;
 			if(adsr.finished())
 				stop();
 		}
 	};
-
+	
 	// Initialise plugin (called once at startup)
 	MySynth() {		
 		controls = { 

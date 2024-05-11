@@ -1530,18 +1530,16 @@ namespace klang {
 		};
 
 		// Default Envelope (full signal)
-		Envelope() : ramp(new Linear()) {
-			set(Points(0.f, 1.f));
-		}
+		Envelope() : ramp(new Linear()) {										set(Points(0.f, 1.f));	}
 
 		// Creates a new envelope from a list of points, e.g. Envelope env = Envelope::Points(0,1)(1,0);
-		Envelope(const Points& points) : ramp(new Linear()) {					set(points);	}
+		Envelope(const Points& points) : ramp(new Linear()) {					set(points);			}
 
 		// Creates a new envelope from a list of points, e.g. Envelope env = { { 0,1 }, { 1,0 } };
-		Envelope(std::initializer_list<Point> points) : ramp(new Linear()) {	set(points);	}
+		Envelope(std::initializer_list<Point> points) : ramp(new Linear()) {	set(points);			}
 
 		// Creates a copy of an envelope from another envelope
-		Envelope(const Envelope& in) : ramp(new Linear()) {						set(in.points); }
+		Envelope(const Envelope& in) : ramp(new Linear()) {						set(in.points);			}
 
 		// Checks if the envelope is at a specified stage (Sustain, Release, Off)
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
@@ -1574,6 +1572,7 @@ namespace klang {
 				time += delta + 0.00001f;
 				point.x = time;
 			}
+			initialise();
 		}
 
 		// Sets an envelope loop between two points
@@ -1698,6 +1697,7 @@ namespace klang {
 		// Set the Ramp class (default: Envelope::Linear)
 		void set(Ramp* ramp) {
 			Envelope::ramp = std::shared_ptr<Ramp>(ramp);
+			initialise();
 		}
         
 	protected:
@@ -1871,17 +1871,21 @@ namespace klang {
 			stage = Sustain;
 		}
 
-		virtual bool stop(Velocity v = 0) {
+		virtual bool release(Velocity v = 0) {
 			if (stage == Off)
 				return true;
 
-			if (stage == Release) {
-				stage = Off;
-			} else {
+			if (stage != Release) {
 				stage = Release;
 				off(v);
 			}
-			return stage != Release;
+			
+			return stage == Off;
+		}
+
+		virtual bool stop(Velocity v = 0) {
+			stage = Off;
+			return true;
 		}
 
 		bool finished() const { return stage == Off; }
@@ -1943,6 +1947,16 @@ namespace klang {
 		virtual void presetLoaded(int preset) { }
 		virtual void optionChanged(int param, int item) { }
 		virtual void buttonPressed(int param) { };
+
+		int indexOf(Note* note) const {
+			int index = 0;
+			for (const auto* n : notes.items) {
+				if (note == n) return 
+					index;
+				index++;
+			}
+			return -1; // not found
+		}
 	};
 
 	template<class SYNTH>

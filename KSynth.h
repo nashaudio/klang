@@ -32,7 +32,7 @@ public:
         }
         bool onStopNote(float velocity) {
             if (note)
-                return note->stop(velocity);
+                return note->release(velocity);
             return true;
         }
         void onPitchWheel (int value) { }
