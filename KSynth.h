@@ -64,6 +64,9 @@ public:
                 bContinue = note->process(buffer);
                 if(note->out.channels() == 1)
                     buffer[1] = buffer[0];
+
+                for (int p = 0; p < nbParameters; p++)
+                    parameters[p] = note->controls[p];
             }
             return bContinue;
         }
@@ -128,6 +131,9 @@ public:
                 debug.graph = &klang::graph;
             if (klang::debug.console.length)
                 debug.console = &klang::debug.console;
+
+            for (int p = 0; p < nbParameters; p++)
+                parameters[p] = synth.control(p);
         }
     }
     

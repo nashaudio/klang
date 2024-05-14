@@ -405,13 +405,13 @@ namespace klang {
 	}
 
 	// gain (decibels)
-	struct Gain : public param {
+	struct dB : public param {
 		Type type() const { return Type::Gain; };
 
 		//INFO("dB", 0.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 
-		Gain(float dB = 0.f) : param(dB) { };
+		dB(float gain = 0.f) : param(gain) { };
 	};
 
 	// amplitude (linear gain)
@@ -420,11 +420,11 @@ namespace klang {
 		using param::param;
 
 		Amplitude(float a = 1.f) : param(a) { };
-		Amplitude(const Gain& db) {
+		Amplitude(const dB& db) {
 			value = powf(10.f, db.value * 0.05f);
 		};
 
-		operator Gain() const {
+		operator dB() const {
 			return 20.f * log10f(value);
 		}
 	};
@@ -851,10 +851,10 @@ namespace klang {
 	}
 
 #ifndef GRAPH_SIZE
-#define GRAPH_SIZE 4096
+#define GRAPH_SIZE 44100
 #endif
 
-	#define F(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
+	#define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
 
 	template <typename TYPE>
 	struct Result {
@@ -1482,11 +1482,16 @@ namespace klang {
 		};
 
 		enum Stage { Sustain, Release, Off };
+		enum Mode { Time, Rate };
 
 		// Envelope point type
 		struct Point {
 			float x, y;
-			Point(double x = 0, double y = 0) : x(float(x)), y(float(y)) { }
+
+			Point() : x(0), y(0) { }
+			
+			template<typename T1, typename T2>
+			Point(T1 x, T2 y) : x(float(x)), y(float(y)) { }
 		};
 
 		// Linked-list of points (for inline initialisation)
@@ -1545,6 +1550,12 @@ namespace klang {
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
 		bool operator!=(Stage stage) const { return Envelope::stage != stage; }
 
+		// assign points (without recreating envelope)
+		Envelope& operator=(std::initializer_list<Point> points) {
+			set(points);
+			return *this;
+		}
+
 		// Sets the envelope based on an array of points
 		void set(const std::vector<Point>& points) {
 			Envelope::points = points;
@@ -1598,10 +1609,11 @@ namespace klang {
 		float getLength() const { return points.size() ? points[points.size() - 1].x : 0.f; }
         
 		// Trigger the release of the envelope
-		void release(float time){
+		void release(float time, float level = 0.f){
 			stage = Release;
-			ramp->setTime(time);
-			ramp->setTarget(0.f);
+			setTarget({ time, level }, 0);
+			//ramp->setTime(time);
+			//ramp->setTarget(0.f);
 		}
 
 		// Returns true if the envelope has finished (is off)
@@ -1643,10 +1655,8 @@ namespace klang {
 		}
         
 		// Set the current envelope target
-		void setTarget(Point& point, float time = 0.0){
-			this->time = time;
-			ramp->setTarget(point.y);
-			ramp->setRate(fabsf(point.y - ramp->out) / ((point.x - time) * fs));
+		void setTarget(const Point& point, float time = 0.0){
+			(this->*setTargetFunction)(point, time);
 		}
         
 		// Returns the output of the envelope and advances the envelope.
@@ -1663,7 +1673,7 @@ namespace klang {
 						if (loop.start != loop.end)
 							setTarget(points[point + 1], points[point].x);
 					} else if ((point + 1) < points.size()) {
-						if (time >= points[point + 1].x) { // reached target point
+						if (mode() == Rate || time >= points[point + 1].x) { // reached target point
 							point++;
 							ramp->setValue(points[point].y); // make sure exact value is set
 
@@ -1675,7 +1685,7 @@ namespace klang {
 					}
 				} break;
 			case Release:
-				if(out == 0.0)
+				if (!ramp->isActive()) //if(out == 0.0)
 					stage = Off;
 				break;
 			case Off:
@@ -1699,8 +1709,36 @@ namespace klang {
 			Envelope::ramp = std::shared_ptr<Ramp>(ramp);
 			initialise();
 		}
+
+		void setMode(Mode mode) {
+			if (mode == Time)
+				setTargetFunction = &Envelope::setTargetTime;
+			else
+				setTargetFunction = &Envelope::setTargetRate;
+		}
+
+		Mode mode() const { return setTargetFunction == &Envelope::setTargetTime ? Time : Rate; }
         
 	protected:
+
+		void (Envelope::* setTargetFunction)(const Point& point, float time) = &Envelope::setTargetTime;
+
+		void setTargetTime(const Point& point, float time = 0.0) {
+			this->time = time;
+			ramp->setTarget(point.y);
+			ramp->setRate(fabsf(point.y - ramp->out) / ((point.x - time) * fs));
+		}
+
+		void setTargetRate(const Point& point, float rate = 0.0) {
+			this->time = 0;
+			if (point.x == 0) {
+				ramp->setValue(point.y);
+			} else {
+				ramp->setTarget(point.y);
+				ramp->setRate(point.x);
+			}
+		}
+
 		std::vector<Point> points;
 		Loop loop;
         
@@ -1766,7 +1804,7 @@ namespace klang {
 			return *this;
 		}
 
-		void process() override {
+		virtual void process() override {
 			OSCILLATOR::set(+in);
 			OSCILLATOR::process();
 			OSCILLATOR::out *= env++ * amp;
