@@ -26,6 +26,9 @@ namespace klang {
 
 	static const constant pi = 3.1415926535897932384626433832795;
 
+	template<typename TYPE>
+	static TYPE random(const TYPE min, const TYPE max) { return rand() * ((max - min) / RAND_MAX) + min; }
+
 	//static float sin(float phase) { return sinf(phase); }
 
 	typedef void event;
@@ -96,7 +99,8 @@ namespace klang {
 		}
 
 		signal& operator=(const signal& in) { value = in; return *this; };
-		signal& operator=(Output& in); // e.g. out = ramp
+		signal& operator=(Output& in); // e.g. out = ramp	
+		signal& operator+=(Output& in); // e.g. out = ramp
 
 		signal operator+(float x) const { return value + x; }
 		signal operator*(float x) const { return value * x; }
@@ -121,11 +125,11 @@ namespace klang {
 
 	struct relative : public signal {
 //		using signal::signal;
-		relative(const signal& in) : signal(in) { }
+//		relative(const signal& in) : signal(in) { }
 	};
 
-	inline relative signal::operator+() const { return *this; }
-	inline relative signal::relative() const { return *this; }
+	inline relative signal::operator+() const { return { value }; }
+	inline relative signal::relative() const { return { value }; }
 
 	static signal& operator>>(float input, signal& destination) {
 		destination << signal(input);
@@ -208,7 +212,7 @@ namespace klang {
 		virtual ~param() { }
 
 		using signal::signal;
-		using signal::operator+;
+		//using signal::operator+;
 		param(constant in) : signal(in.f) { }
 		param(float initial = 0.f) : signal(initial) { }
 		param(const signal& in) : signal(in) { }
@@ -1166,13 +1170,22 @@ namespace klang {
 		virtual const signal& output() const { return out; }
 		virtual signal& operator>>(signal& destination) { process(); return destination = out; }
 
-//		virtual operator param() {  process(); return out; }
 		virtual operator signal() { process(); return out; }
 
-		template<typename TYPE> signal operator+(TYPE other) { process(); return out + other; }
-		template<typename TYPE> signal operator*(TYPE other) { process(); return out * other; }
-		template<typename TYPE> signal operator-(TYPE other) { process(); return out - other; }
-		template<typename TYPE> signal operator/(TYPE other) { process(); return out / other; }
+		template<typename TYPE> signal operator+(TYPE& other) { process(); return out + signal(other); }
+		template<typename TYPE> signal operator*(TYPE& other) { process(); return out * signal(other); }
+		template<typename TYPE> signal operator-(TYPE& other) { process(); return out - signal(other); }
+		template<typename TYPE> signal operator/(TYPE& other) { process(); return out / signal(other); }
+
+		//signal operator+(float other) = delete;
+		//signal operator*(float other) = delete;
+		//signal operator-(float other) = delete;
+		//signal operator/(float other) = delete;
+
+		//signal operator+(float other) { process(); return out + other; }
+		//signal operator*(float other) { process(); return out * other; }
+		//signal operator-(float other) { process(); return out - other; }
+		//signal operator/(float other) { process(); return out / other; }
 
 		//signal operator+(Output& other) { return signal(out) + signal(other); }
 
@@ -1181,6 +1194,11 @@ namespace klang {
 
 	inline signal& signal::operator=(Output& b) { 
 		b >> *this;
+		return *this;
+	}
+
+	inline signal& signal::operator+=(Output& in) { // e.g. out += osc;
+		value += signal(in);
 		return *this;
 	}
 
@@ -1193,6 +1211,11 @@ namespace klang {
 	inline signal operator*(float other, Output& output) { return signal(output) * other; }
 	inline signal operator-(float other, Output& output) { return signal(other) - signal(output); }
 	inline signal operator/(float other, Output& output) { return signal(other) / signal(output); }
+
+	inline signal operator+(Output& output, float other) { return signal(output) + other; }
+	inline signal operator*(Output& output, float other) { return signal(output) * other; }
+	inline signal operator-(Output& output, float other) { return signal(output) - other; }
+	inline signal operator/(Output& output, float other) { return signal(output) / other; }
 
 	//inline signal operator+(Output& other, Output& output) { return signal(output) + signal(other); }
 	//inline signal operator*(Output& other, Output& output) { return signal(output) * signal(other); }
@@ -1208,6 +1231,7 @@ namespace klang {
 
 	protected:
 		virtual void set(param p) { };
+		virtual void set(relative p) { };
 		virtual void set(param p1, param p2) { };
 		virtual void set(param p1, relative p2) { };
 		virtual void set(param p1, param p2, param p3) { };
@@ -1423,6 +1447,8 @@ namespace klang {
 				setTime(time);
 			}
 
+			virtual ~Ramp() { }
+
 			// Is ramp currently processing (ramping)?
 			bool isActive() const {
 				return active;
@@ -1546,6 +1572,8 @@ namespace klang {
 		// Creates a copy of an envelope from another envelope
 		Envelope(const Envelope& in) : ramp(new Linear()) {						set(in.points);			}
 
+		virtual ~Envelope() { }
+
 		// Checks if the envelope is at a specified stage (Sustain, Release, Off)
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
 		bool operator!=(Stage stage) const { return Envelope::stage != stage; }
@@ -1609,7 +1637,7 @@ namespace klang {
 		float getLength() const { return points.size() ? points[points.size() - 1].x : 0.f; }
         
 		// Trigger the release of the envelope
-		void release(float time, float level = 0.f){
+		virtual void release(float time, float level = 0.f){
 			stage = Release;
 			setTarget({ time, level }, 0);
 			//ramp->setTime(time);
@@ -1756,11 +1784,11 @@ namespace klang {
 
 		ADSR() { set(0.5, 0.5, 1, 0.5); }
 
-		void set(param attack, param decay, param sustain, param release) {
-			A = attack + 0.00001f;
-			D = decay + 0.00001f;
+		void set(param attack, param decay, param sustain, param release) override {
+			A = attack + 0.005f;
+			D = decay + 0.005f;
 			S = sustain;
-			R = release + 0.00001f;
+			R = release + 0.005f;
 
 			points.resize(3);
 			points[0] = { 0, 0 };
@@ -1771,8 +1799,8 @@ namespace klang {
 			setLoop(2, 2);
 		}
 
-		void release() {
-			Envelope::release(R);
+		void release(float time = 0.f, float level = 0.f) override {
+			Envelope::release(time ? time : float(R), level);
 		}
 
 		bool operator==(Envelope::Stage stage) const {
@@ -2214,7 +2242,7 @@ namespace klang {
 					amount = 2u * (signed int)(FBASE / FC4 * f);
 				}
 
-				// convert int32 to float [0, 2pi) <-- TODO check -ve values
+				// convert int32 to float [0, 2pi)
 				operator float() const {
 					const unsigned int i = (amount >> 9) | 0x3f800000;
 					return *(const float*)&i - 1.f;
@@ -2243,19 +2271,19 @@ namespace klang {
 
 				// convert uint32 to float [0, 1)
 				operator float() const {
-					//const unsigned int i = (position >> 9) | 0x3f800000;
-					//return (*(const float*)&i - 1.f);
+					const unsigned int i = (position >> 9) | 0x3f800000;
+					return (*(const float*)&i - 1.f);
 
-					// = quarter-turn (pi/2) phase offset
-					unsigned int phase = position + 0x40000000;
+					//// = quarter-turn (pi/2) phase offset
+					//unsigned int phase = position + 0x40000000;
 
-					// range reduce to [0,pi]
-					if (phase & 0x80000000) // cos(x) = cos(-x)
-						phase = ~phase; 
+					//// range reduce to [0,pi]
+					//if (phase & 0x80000000) // cos(x) = cos(-x)
+					//	phase = ~phase; 
 
-					// convert to float in range [-pi/2,pi/2)
-					phase = (phase >> 8) | 0x3f800000;
-					return *(float*)&phase * pi - 3.f/2.f * pi; // 1.0f + (phase / (2^31))
+					//// convert to float in range [-pi/2,pi/2)
+					//phase = (phase >> 8) | 0x3f800000;
+					//return *(float*)&phase * pi - 3.f/2.f * pi; // 1.0f + (phase / (2^31))
 				}
 
 				// returns offset phase
@@ -2376,7 +2404,7 @@ namespace klang {
 				void reset() override {
 					Sine::position = Oscillator::position = 0;
 					Sine::offset = Oscillator::offset = 0;
-					set(0.f);
+					set(Oscillator::frequency, 0.f);
 				}
 
 				// set the frequency
@@ -2418,12 +2446,12 @@ namespace klang {
 					OldUp = 0b010, OldDown = 0b000,
 					Carry = 0b100, NoCarry = 0b000,
 
-					Down			= OldDown|NewDown|NoCarry,  
-					UpDown			= OldUp|NewDown|NoCarry,    
-					Up				= OldUp|NewUp|NoCarry,		
-					DownUpDown		= OldDown|NewDown|Carry,	
-					DownUp			= OldDown|NewUp|Carry,		
-					UpDownUp		= OldUp|NewUp|Carry			
+					Down		= OldDown|NewDown|NoCarry,  
+					UpDown		= OldUp|NewDown|NoCarry,    
+					Up			= OldUp|NewUp|NoCarry,		
+					DownUpDown	= OldDown|NewDown|Carry,	
+					DownUp		= OldDown|NewUp|Carry,		
+					UpDownUp	= OldUp|NewUp|Carry			
 				};
 
 				Fast::Increment increment;
@@ -2437,9 +2465,12 @@ namespace klang {
 				}
 				
 				void set(param frequency) {
-					increment.set(frequency);
-					delta = increment;
-					init();
+					//if (frequency != Oscillator::frequency) {
+					//	Oscillator::frequency = frequency;
+						increment.set(frequency);
+						delta = increment;
+						init();
+					//}
 				}
 
 				void set(param frequency, param phase) {
@@ -2466,7 +2497,7 @@ namespace klang {
 					const State transition = (State)(state | (offset.position < (unsigned int)increment.amount ? DownUpDown : Down)); 
 
 					// finally, tick the oscillator
-					offset.position += increment.amount;
+					offset += increment;
 
 					return transition;
 				}

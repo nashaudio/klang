@@ -14,9 +14,7 @@ namespace klang {
 	};
 	
 	namespace test {
-		template<typename TYPE>
-		static TYPE random(const TYPE min, const TYPE max) { return rand() * ((max - min) / RAND_MAX) + min; }
-		
+		using klang::random;
 		template<typename TYPE>
 		static TYPE random() { return random(std::numeric_limits<TYPE>::min(), std::numeric_limits<TYPE>::max()); }
 
