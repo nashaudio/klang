@@ -123,7 +123,7 @@ extern "C" {                                                                    
         try {                                                                                                               \
             if(buffer) *size = ((DSP::Synth*)synth)->getDebugAudio(buffer);                                                 \
             if(graph) ((DSP::Synth*)synth)->getDebugGraph(graph);                                                           \
-            if(console) ((DSP::Effect*)effect)->getDebugConsole(console);                                                   \
+            if(console) ((DSP::Synth*)synth)->getDebugConsole(console);                                                   \
             return 0;                                                                                                       \
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \

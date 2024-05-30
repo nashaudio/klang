@@ -33,6 +33,8 @@ struct MySynth : Synth {
 			out *= (adsr++) * 0.25;							
 			if (adsr.finished())
 				stop();
+				
+			adsr >> debug;			
 		}
 	};
 

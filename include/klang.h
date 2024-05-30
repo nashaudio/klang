@@ -809,7 +809,7 @@ namespace klang {
 	}
 
 	template<typename TYPE>
-	static Debug& operator>>(TYPE source, Debug& debug) {
+	static Debug& operator>>(TYPE& source, Debug& debug) {
 		//(signal&)debug += source;
 		if (debug.buffer) {
 			(*debug.buffer) += source;
@@ -1724,7 +1724,7 @@ namespace klang {
 		}
 
 		void process() override { /* do nothing -> only process on ++ */
-			//out = *ramp;
+			out = *ramp;
 		}
         
 		// Retrieve a specified envelope point (read-only)
