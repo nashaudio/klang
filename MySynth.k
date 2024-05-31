@@ -15,7 +15,7 @@ struct MySynth : Synth {
 		
 			param detune = f * controls[2] * 0.01;
 			for(int o=0; o<7; o++)
-				osc[o](f + (o-3) * detune, 0, controls[1]);
+				osc[o](f + detune * (o-3), 0, controls[1]);
 			adsr(controls[0], 0.25, 0.5, 0.5);
 		}
 

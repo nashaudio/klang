@@ -11,8 +11,18 @@
 #include <string>
 #include <cstdarg>
 #include <algorithm>
+#include <type_traits>
 
 namespace klang {
+	//template<typename Base, typename Derived>
+	//struct is_base_of_any : std::false_type {};
+
+	//template<typename Base, typename... Deriveds>
+	//struct is_base_of_any<Base, std::tuple<Deriveds...>> : std::disjunction<std::is_base_of<Base, Deriveds>...> {};
+
+	//template<typename Base, typename... Deriveds>
+	//using is_base_of_any_t = typename is_base_of_any<Base, std::tuple<Deriveds...>>::type;
+
 	using namespace std;
 
 	struct constant {
@@ -99,20 +109,29 @@ namespace klang {
 		}
 
 		signal& operator=(const signal& in) { value = in; return *this; };
-		signal& operator=(Output& in); // e.g. out = ramp	
+		signal& operator=(Output& in); // e.g. out = ramp		
 		signal& operator+=(Output& in); // e.g. out = ramp
 
+		//template<typename T, typename = std::enable_if_t<std::is_arithmetic<T>::value>>
+		//signal operator+(T x) const { return value + (float)x; }
+		//
+		//template<typename T, typename = std::enable_if_t<std::is_arithmetic<T>::value>>
+		//signal operator*(T x) const { return value * (float)x; }
+
 		signal operator+(float x) const { return value + x; }
+		signal operator-(float x) const { return value - x; }
 		signal operator*(float x) const { return value * x; }
-
-		signal& operator+=(float x) { value += x; return *this; }
-		signal& operator*=(float x) { value *= x; return *this; }
-
+		signal operator/(float x) const { return value / x; }
+		
 		signal operator+(double x) const { return value + (float)x; }
+		signal operator-(double x) const { return value - (float)x; }
 		signal operator*(double x) const { return value * (float)x; }
-
-		signal& operator+=(double x) { value += (float)x; return *this; }
-		signal& operator*=(double x) { value *= (float)x; return *this; }
+		signal operator/(double x) const { return value / (float)x; }
+		
+		signal operator+(int x) const { return value + (float)x; }
+		signal operator-(int x) const { return value - (float)x; }
+		signal operator*(int x) const { return value * (float)x; }
+		signal operator/(int x) const { return value / (float)x; }
 
 		operator float() const { return value; }
 		operator float&() {		 return value; }
