@@ -131,11 +131,12 @@ This object defines the processing for a single synth note that can then be used
 ```
   klang::Subtractive note;
  
-  note.start(pitch, velocity); 
-  note.stop();
-  
+  note.start(pitch, velocity);   // Note On
+  note.release(pitch, velocity); // Note Off
+    
   klang::Buffer buffer = { pfBuffer, numSamples };
-  note.process(buffer);
+  if(!note.process(buffer))
+     note.stop();
 ```
 For ready-made AU/VST compatible C++ templates for Xcode and Visual Studio, see the github.com/nashnet/myeffect and github.com/nashnet/mysynth repositories.
 rapIDE (Klang Studio) plugins also support a pure Klang live coding mode.
