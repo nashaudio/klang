@@ -108,7 +108,7 @@ struct Subtractive : Note {
 };
 ```
 
-This example shapes the note and adds a release stage using an ADSR amplitude envelope. The <code>ADSR</code> is a type of <code>Envelope</code> that takes four parameters (attack, decay, sustain, release - set in <code>on()</code>) and uses its output to scale the (\*) amplitude of the signal. To add the 'release' stage and continue processing audio after a **note off**, we add the <code>off()</code> event and trigger the release of an ADSR envelope. Now, <code>process()</code> will continue to be called until you tell it to <code>stop()</code>, which we called when the ADSR is finished (that is, <code>adsr.finished()</code> is true).
+This example shapes the note and adds a release stage using an ADSR amplitude envelope. The <code>ADSR</code> is a type of <code>Envelope</code> that takes four parameters (attack, decay, sustain, release - set in <code>on()</code>) and uses its output to scale the (\*) amplitude of the signal. To add the 'release' stage and continue processing audio after a **note off**, we add the <code>off()</code> event and trigger the release of an ADSR envelope. Now, <code>process()</code> will continue to be called until you tell it to <code>stop()</code>, which we call when the ADSR is finished (that is, <code>adsr.finished()</code> is true).
 
 For further techniques, see the Examples below.
 
@@ -131,11 +131,12 @@ This object defines the processing for a single synth note that can then be used
 ```
   klang::Subtractive note;
  
-  note.start(pitch, velocity); 
-  note.stop();
-  
+  note.start(pitch, velocity);   // Note On
+  note.release(pitch, velocity); // Note Off
+    
   klang::Buffer buffer = { pfBuffer, numSamples };
-  note.process(buffer);
+  if(!note.process(buffer))
+     note.stop();
 ```
 For ready-made AU/VST compatible C++ templates for Xcode and Visual Studio, see the github.com/nashnet/myeffect and github.com/nashnet/mysynth repositories.
 rapIDE (Klang Studio) plugins also support a pure Klang live coding mode.
