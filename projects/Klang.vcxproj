@@ -131,11 +131,12 @@
     <None Include="..\DX7.k" />
     <None Include="..\MyEffect.k" />
     <None Include="..\MySynth.k" />
+    <None Include="..\THX.k" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Extra.h" />
-    <ClInclude Include="..\include\klang.h" />
-    <ClInclude Include="..\include\klang\tests.h" />
+    <ClInclude Include="..\..\include\klang.h" />
+    <ClInclude Include="..\..\include\klang\tests.h" />
     <ClInclude Include="..\MyEffect.h" />
     <ClInclude Include="..\MyNote.h" />
     <ClInclude Include="..\MySynth.h" />

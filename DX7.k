@@ -288,20 +288,10 @@ struct DX7 : Synth {
 		
 			adsr(0.005,0,1,1);
 			
-//			Envelope& env = op[0].env;
-//			debug.print("env = ");
-//			for(int p=0; p<4; p++)
-//				debug.print(" { %f, %f} ", env[p].x, env[p].y);
-//			debug.print("\n");
-//			
-//			graph.clear();
-//			for(int x=0; x<44100; x++){
-//				float y = env++;
-//				if(!(x % 10))
-//					graph += { (double)x, (float)y };
-//					
-//			}
-//			env.initialise();
+			Envelope& env = op[0].env;
+			graph.clear();
+			for(int x=0; x<50; x++)
+				graph += env++;
 			
 			switch(PATCH.ALGORITHM){
 			case 2:  algorithm = &MyNote::algorithm2; break;
@@ -339,6 +329,8 @@ struct DX7 : Synth {
 			out *= adsr++ * 0.1f;
 			if(finished())
 				stop();
+				
+			op[1] >> debug;
 		}
 	};
 	

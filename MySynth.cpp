@@ -6,7 +6,7 @@
 //
 
 #include "MySynth.h"
-#include "MyNote.h"
+#include "MySynthNote.h"
 
 ////////////////////////////////////////////////////////////////////////////
 // SYNTH - represents the whole synthesis plugin

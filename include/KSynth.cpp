@@ -43,17 +43,7 @@ INT_FUNCTION getDebugData(void* synth, const float** const buffer, int* size, vo
         return 0;                                                       
     } catch (...) { return 1; }                                         
 }
-
-//INT_FUNCTION getDebugAudio(void* synth, const float** buffer, int* size) {
-//    try { *size = ((DSP::Synth*)synth)->getDebugAudio(buffer); return 0; }
-//    catch (...) { return 1; }                                                                                         
-//}
-//
-//INT_FUNCTION getDebugGraph(void* synth, void** graph) {
-//    try { ((DSP::Synth*)synth)->getDebugGraph(graph); return 0; }
-//    catch (...) { return 1; }                                   
-//}
-                                                                                                                            
+                                                                                                                           
 INT_FUNCTION noteOnStart(void* note, int pitch, float velocity){                                                                
     try { 
         ((DSP::Note*)note)->onStartNote(pitch, velocity);
@@ -93,7 +83,7 @@ INT_FUNCTION noteProcess(void* note, float** outputBuffers, int numSamples, bool
                                                                                                                             
 INT_FUNCTION synthProcess(void* synth, const float** inputBuffers, float** outputBuffers, int numSamples) {             
 //    try { 
-        ((DSP::Synth*)synth)->process(inputBuffers, outputBuffers, numSamples);
+    ((DSP::Synth*)synth)->process(inputBuffers, outputBuffers, numSamples); 
         return 0;                            
 //    } catch (...) {
 //        return 1;

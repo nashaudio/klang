@@ -2,12 +2,12 @@
 #include <klang.h>
 using namespace klang::optimised;
 
-struct MySynth : Synth {
+struct SuperSaw : Synth {
 
 	struct MyNote : public Note {
-		Sine lfo;
 		Saw osc[7];
 		ADSR adsr;
+		Sine lfo;
 
 		event on(Pitch pitch, Amplitude velocity) { 
 			const param f = pitch > Type::Frequency;
@@ -23,7 +23,12 @@ struct MySynth : Synth {
 		}
 
 		void process() {
-			out = 0;
+			
+			
+			
+			MyNote* ptr = nullptr;
+			out = ptr->adsr++;
+			
 			for(int s=0; s<7; s++)
 				out += osc[s] / 7;
 			
@@ -31,12 +36,12 @@ struct MySynth : Synth {
 			if (adsr.finished())
 				stop();
 				
-			lfo(6) >> debug;
+				lfo(60) >> debug;
 		}
 	};
 
 	// Initialise plugin (called once at startup)
-	MySynth() {		
+	SuperSaw() {		
 		controls = { 
 			// UI controls and parameters
 			Dial("Attack"),

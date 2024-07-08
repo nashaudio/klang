@@ -5,3 +5,4 @@
 /.vs
 *.pdb
 /projects/x64
+/include/include.o

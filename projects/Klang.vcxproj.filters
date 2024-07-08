@@ -27,6 +27,9 @@
     <None Include="..\MySynth.k">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="..\THX.k">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Extra.h">
@@ -41,10 +44,10 @@
     <ClInclude Include="..\MySynth.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\klang.h">
+    <ClInclude Include="..\..\include\klang.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\klang\tests.h">
+    <ClInclude Include="..\..\include\klang\tests.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

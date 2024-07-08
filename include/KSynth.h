@@ -5,9 +5,9 @@
 //  Internal adapter for Klang-based effect mini-plugin
 //
 
-#include "include/plugin.h"
-#include "include/dsp.h"
-#include "include/klang.h"
+#include "plugin.h"
+#include "dsp.h"
+#include "klang.h"
 
 #pragma once
 
