@@ -226,7 +226,7 @@ struct Operator : public klang::Operator<Sine> {
 		pitch = int(p);
 		velocity = int(v * 99.f); // DX7 only supports velocity 0-99
 		
-		const param fc = p > Type::Frequency;
+		const param fc = p -> Frequency;
 		set((OSC.MODE == Ratio ? (float)fc * OSC.FREQ : OSC.FREQ) + DX::Detune(OSC.DETUNE), 0);
 		
 		outlevel = Level.getOutputLevel(pitch, velocity, OP);
@@ -279,7 +279,7 @@ struct DX7 : Synth {
 		// Note On
 		event on(Pitch p, Velocity v) { 		
 			preset = controls[0];
-			fc = (p-12) > Type::Frequency;
+			fc = (p-12) -> Frequency;
 			
 			const auto& PATCH = DX::Presets[preset];
 			const auto* OP = PATCH.OP;		
@@ -288,10 +288,10 @@ struct DX7 : Synth {
 		
 			adsr(0.005,0,1,1);
 			
-			Envelope& env = op[0].env;
-			graph.clear();
-			for(int x=0; x<50; x++)
-				graph += env++;
+//			Envelope& env = op[0].env;
+//			graph.clear();
+//			for(int x=0; x<50; x++)
+//				graph += env++;
 			
 			switch(PATCH.ALGORITHM){
 			case 2:  algorithm = &MyNote::algorithm2; break;
@@ -330,7 +330,7 @@ struct DX7 : Synth {
 			if(finished())
 				stop();
 				
-			op[1] >> debug;
+//			op[1] >> debug;
 		}
 	};
 	

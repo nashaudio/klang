@@ -58,7 +58,7 @@ public:
                 };
 
                 // debug buffer
-                klang::Debug::Session debug(outputBuffers[numChannels], numSamples, klang::Debug::Notes);
+                klang::Debug::Session debug(outputBuffers[numChannels], numSamples, klang::Debug::Buffer::Notes);
 
                 // apply audio processing
                 bContinue = note->process(buffer);
@@ -111,7 +111,7 @@ public:
                 { outputBuffers[1], numSamples },
             };
 
-            klang::Debug::Session kdb(outputBuffers[2], numSamples, klang::Debug::Synth);
+            klang::Debug::Session kdbg(nullptr, numSamples, klang::Debug::Buffer::Synth);
 
             // apply audio processing
             if (synth.isMono()) {
@@ -123,8 +123,8 @@ public:
             }
 
             debug.reset();
-            if (kdb.isActive()) {
-                debug.buffer = kdb.buffer();
+            if (kdbg.hasAudio()) {
+                debug.buffer = kdbg.getAudio();
                 debug.size = numSamples;
             }
             if (klang::graph.isActive())
@@ -156,7 +156,7 @@ private:
         operator bool() const { return mono || stereo; }
 
         unsigned int controls() { return isMono() ? mono->controls.count : stereo->controls.count; }
-        float& control(int index) { return isMono() ? mono->controls[index] : stereo->controls[index]; }
+        float& control(int index) { return isMono() ? mono->controls[index].value : stereo->controls[index].value; }
 
         klang::mono::Synth* mono = nullptr;
         klang::stereo::Synth* stereo = nullptr;

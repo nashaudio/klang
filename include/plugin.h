@@ -20,19 +20,21 @@
 
 #include <string>
 
-#if __has_include("Background")
-#include "Background"
-#else
-#define BACKGROUND 0
-#pragma message("Background not found")
-#endif
+#ifndef BACKGROUND
+    #if __has_include("Background")
+        #include "Background"
+    #else
+        #define BACKGROUND 0
+        #pragma message("Background not found")
+    #endif
 
-namespace Background {
-    const char data[] = { 
-        BACKGROUND 
-    };
-    const int size = sizeof(data);
-}
+    namespace Background {
+        thread_local static const char data[] = {
+            BACKGROUND 
+        };
+        thread_local static const int size = sizeof(data);
+    }
+#endif
 
 namespace klang { struct Graph; struct Console; }
 
@@ -91,7 +93,7 @@ extern "C" {                                                                    
         try {                                                                                                               \
             if(buffer) *size = ((DSP::Effect*)effect)->getDebugAudio(buffer);                                               \
             if(graph) ((DSP::Effect*)effect)->getDebugGraph(graph);                                                         \
-            if(console) ((DSP::Effect*)effect)->getDebugConsole(console);                                                   \
+            if(console) ((DSP::Effect*)effect)->getDebugText(console);                                                      \
             return 0;                                                                                                       \
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \
@@ -123,7 +125,7 @@ extern "C" {                                                                    
         try {                                                                                                               \
             if(buffer) *size = ((DSP::Synth*)synth)->getDebugAudio(buffer);                                                 \
             if(graph) ((DSP::Synth*)synth)->getDebugGraph(graph);                                                           \
-            if(console) ((DSP::Synth*)synth)->getDebugConsole(console);                                                   \
+            if(console) ((DSP::Synth*)synth)->getDebugText(console);                                                        \
             return 0;                                                                                                       \
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \
@@ -253,20 +255,20 @@ namespace DSP
 	const Parameter::Size Automatic = { -1, -1, -1, -1 };
 	const Parameter::Options NoOptions;
 
-	static Parameter Dial(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
+	inline static Parameter Dial(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Parameter::ROTARY, min, max, initial, Automatic, NoOptions, initial };	}
 
-	static Parameter Button(const char* name)
+    inline static Parameter Button(const char* name)
 	{	return { Caption::from(name), Parameter::BUTTON, 0, 1, 0.f, Automatic, NoOptions, 0.f };	}
 
-	static Parameter Toggle(const char* name, bool initial = false)
+    inline static Parameter Toggle(const char* name, bool initial = false)
 	{	return { Caption::from(name), Parameter::TOGGLE, 0, 1, initial ? 1.f : 0.f, Automatic, NoOptions, initial ? 1.f : 0.f};	}
 
-	static Parameter Slider(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
+    inline static Parameter Slider(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Parameter::SLIDER, min, max, initial, Automatic, NoOptions, initial }; }
 
 	template<typename... Options>
-	static Parameter Menu(const char* name, const Options... options)
+    inline static Parameter Menu(const char* name, const Options... options)
 	{	Parameter::Options menu;
 	    const char* strings[] = { options... };
         int nbValues = sizeof...(options);
@@ -275,13 +277,13 @@ namespace DSP
 		return { Caption::from(name), Parameter::MENU, 0, menu.size() - 1.f, 0, Automatic, menu, 0 }; 
 	}
 
-	static Parameter Meter(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
+    inline static Parameter Meter(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Parameter::METER, min, max, initial, Automatic, NoOptions, initial }; }
 
-	static Parameter PitchBend()
+    inline static Parameter PitchBend()
 	{	return { { "PITCH\nBEND" }, Parameter::WHEEL, 0.f, 16384.f, 8192.f, Automatic, NoOptions, 8192.f }; }
 
-	static Parameter ModWheel()
+    inline static Parameter ModWheel()
 	{	return { { "MOD\nWHEEL" }, Parameter::WHEEL, 0.f, 127.f, 0.f, Automatic, NoOptions, 0.f }; }
 
     struct Parameters : Parameter::Array<Parameter, 128>

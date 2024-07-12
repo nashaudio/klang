@@ -72,6 +72,17 @@ namespace klang {
 			static constexpr TYPE arg2 = max;
 		};
 
+		template<int X, typename TYPE> struct only {
+			static constexpr TYPE min = TYPE(X);
+			static constexpr TYPE max = TYPE(X);
+			static constexpr TYPE arg2 = max;
+		};
+		//template<int X, typename TYPE> struct only1 {
+		//	static constexpr TYPE min = TYPE(X);
+		//	static constexpr TYPE max = TYPE(X);
+		//	static constexpr TYPE arg2 = max;
+		//};
+
 		constexpr int MAX_TOLERANCE = 19;
 		constexpr double TOLERANCES[MAX_TOLERANCE+1] = { 0,1E-1,1E-2,1E-3,1E-4,1E-5,1E-6,1E-7,1E-8,1E-9,1E-10,1E-11,1E-12,1E-13,1E-14,1E-15,1E-16,1E-17,1E-18,1E-19 };
 		constexpr const char* TOLERANCE_STRINGS[MAX_TOLERANCE+1] = { "0","0.1","0.01","0.001","0.0001","0.00001","0.000001","0.0000001","0.00000001","0.000000001","0.0000000001","0.00000000001","0.000000000001","0.0000000000001","0.00000000000001","0.000000000000001","0.0000000000000001","0.00000000000000001","0.000000000000000001","0.0000000000000000001" };
@@ -190,6 +201,38 @@ namespace klang {
 			}
 			auto stop = std::chrono::high_resolution_clock::now();
 			return std::chrono::duration_cast<std::chrono::nanoseconds>(stop-start).count() / 1000000.0;
+		}
+
+		template<typename T1, typename T2, template<typename> class TEST = all>
+		inline double profile(T1(*func1)(T1, T2)) {
+			std::array<T1, 1000> x;
+			std::array<T2, 1000> y;
+			for (int t = 0; t < 1000; t++) {
+				x[t] = random<T1>(TEST<T1>::min, TEST<T1>::max);
+				y[t] = random<T1>(TEST<T2>::min, TEST<T2>::max);
+			}
+			auto start = std::chrono::high_resolution_clock::now();
+			T1 sum = 0.0;
+			for (int t = 0; t < 1000; t++) {
+				sum += func1(x[t], y[t]);
+			}
+			auto stop = std::chrono::high_resolution_clock::now();
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start).count() / 1000000.0;
+		}
+
+		template<typename T1, typename T2, template<typename> class TEST = all>
+		inline double profile(T1(*func1)(T1, T2), T2 arg2) {
+			std::array<T1, 1000> x;
+			for (int t = 0; t < 1000; t++) {
+				x[t] = random<T1>(TEST<T1>::min, TEST<T1>::max);
+			}
+			auto start = std::chrono::high_resolution_clock::now();
+			T1 sum = 0.0;
+			for (int t = 0; t < 1000; t++) {
+				sum += func1(x[t], arg2);
+			}
+			auto stop = std::chrono::high_resolution_clock::now();
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start).count() / 1000000.0;
 		}
 
 		static void run() {

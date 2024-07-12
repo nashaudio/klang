@@ -28,7 +28,7 @@ struct THX : Stereo::Synth {
 						{ 8,  0.250f * random(1 - detune * 0.25, 1 + detune * 0.25) }, 
 						{ 10, 0.500f * random(1 - detune * 0.1,  1 + detune * 0.1) }, 
 						{ 14, 1.000f * random(1 - 0.0003, 		 1 + 0.0003) } };
-				osc(f,0,1);
+				osc(f,0);
 			}
 			
 			void process(){

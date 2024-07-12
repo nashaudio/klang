@@ -45,7 +45,7 @@ public:
             for (int p = 0; p < nbParameters; p++)
                 effect.control(p) = parameters[p];
 
-            klang::Debug::Session kdb(outputBuffers[2], numSamples, klang::Debug::Effect);
+            klang::Debug::Session kdb(outputBuffers[2], numSamples, klang::Debug::Buffer::Effect);
 
             // apply audio processing (stereo)
             if (effect.isMono()) {
