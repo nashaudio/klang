@@ -27,8 +27,13 @@ public:
         KSynth* getSynth() { return (KSynth*)synth; }
     
         void onStartNote(int pitch, float velocity) {
-            if (note)
+            if (note) {
                 note->start(pitch, velocity);
+
+                const int nbParameters = std::min(parameters.count, note->controls.size());
+                for (int p = 0; p < nbParameters; p++)
+                    parameters[p] = note->controls[p];
+            }
         }
         bool onStopNote(float velocity) {
             if (note)

@@ -10,7 +10,7 @@ struct StereoTest : Stereo::Synth {
 		
 		// Note On
 		event on(Pitch pitch, Amplitude velocity) {
-			param f = pitch > Type::Frequency;
+			param f = pitch -> Frequency;
 			osc(f);
 			lfo(1);
 		}

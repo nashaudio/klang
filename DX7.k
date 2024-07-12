@@ -321,7 +321,8 @@ struct DX7 : Synth {
 
 		// Apply processing (called once per sample)
 		void process() {						
-			(this->*algorithm)();
+			if(algorithm)
+				(this->*algorithm)();
 			
 			//(op[1] >> op[0]) >> out;
 			//((op[1] << op[1]) >> op[0]) >> out;

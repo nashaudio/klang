@@ -10,7 +10,7 @@ struct SuperSaw : Synth {
 		Sine lfo;
 
 		event on(Pitch pitch, Amplitude velocity) { 
-			const param f = pitch > Type::Frequency;
+			const param f = pitch -> Frequency;
 			const param detune = 0.01 * controls[2] * f;
 			
 			for(int s=0; s<7; s++)
@@ -23,20 +23,13 @@ struct SuperSaw : Synth {
 		}
 
 		void process() {
-			
-			
-			
-			MyNote* ptr = nullptr;
-			out = ptr->adsr++;
-			
+			out = 0;
 			for(int s=0; s<7; s++)
 				out += osc[s] / 7;
 			
 			out *= adsr++;							
 			if (adsr.finished())
 				stop();
-				
-				lfo(60) >> debug;
 		}
 	};
 

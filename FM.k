@@ -39,7 +39,7 @@ struct FM : Synth {
 				graph.add(sin_lookup[x]);
 			}
 		
-			const param fc = p > Type::Frequency;
+			const param fc = p -> Frequency;
 			const Frequency fd = fc * controls[0];
 			
 			op1.set(fd,0);

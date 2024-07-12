@@ -17,7 +17,7 @@ struct Guitar : Synth {
 		struct Excitation : Generator {
 			Envelope impulse;
 			Delay<44100> delay;
-			LPF filter[2];
+			IIR filter[2];
 			Noise noise;
 			
 			void process() {
@@ -28,7 +28,7 @@ struct Guitar : Synth {
 			
 		struct Resonator : Modifier {
 			Delay<44100> delay;
-			LPF filter[2];
+			IIR filter[2];
 			param gain;
 			
 			void process() {
@@ -42,7 +42,7 @@ struct Guitar : Synth {
 		
 		// Note On
 		event on(Pitch pitch, Amplitude velocity) {	
-			param f = ((pitch - 12)> Type::Frequency);		
+			param f = (pitch - 12) -> Frequency;		
 			param delay = 1/f * klang::fs - 1.5;
 					
 			synth = (Guitar*)getSynth();

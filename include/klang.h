@@ -125,10 +125,7 @@ namespace klang {
 		return power_t<BASE, EXP>(std::pow(base, exp));
 	}
 
-	template<typename TYPE>
-	TYPE abs(TYPE x) {
-		return x < 0 ? -x : x;
-	}
+	//float abs(float x) { return x < 0 ? -x : x; }
 
 	constexpr constant pi =    { 3.1415926535897932384626433832795 };
 	constexpr constant ln2 =   { 0.6931471805599453094172321214581 };
@@ -188,6 +185,7 @@ namespace klang {
 	struct Output;
 
 	struct relative;
+
 	struct signal {
 		float value;
 
@@ -258,9 +256,9 @@ namespace klang {
 		relative relative() const;
 	};
 
-	inline signal operator^(float x, const signal y) { return power(x, y.value); }
-	inline signal operator^(double x, const signal y) { return power(x, y.value); }
-	inline signal operator^(int x, const signal y) { return power(x, y.value); }
+	inline signal operator^(float x, const signal& y) { return power(x, y.value); }
+	inline signal operator^(double x, const signal& y) { return power(x, y.value); }
+	inline signal operator^(int x, const signal& y) { return power(x, y.value); }
 
 #define IS_SIMPLE_TYPE(type)																					\
 	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
@@ -572,8 +570,9 @@ namespace klang {
 		double d;
 		float inv;
 		float w;
+		float nyquist;
 
-		SampleRate(int sr) : i(sr), f((float)sr), d((double)sr), inv(float(1.f / sr)), w(float(2.0f * pi * inv)) { }
+		SampleRate(int sr) : i(sr), f((float)sr), nyquist(float(sr / 2)), d((double)sr), inv(float(1.f / sr)), w(float(2.0f * pi * inv)) { }
 
 		operator float() { return f; }
 	} fs(44100); // sample rate
@@ -649,6 +648,8 @@ namespace klang {
 
 		operator const signal&() const { return value; }
 		operator signal&() { return value; }
+
+		operator float() const { return value.value; }
 	};
 
 	const Control::Size Automatic = { -1, -1, -1, -1 };
@@ -1366,7 +1367,7 @@ namespace klang {
 		};
 
 		template<typename SIGNAL>
-		inline Input<SIGNAL>& operator>>(SIGNAL source, Input<SIGNAL>& input) {
+		inline Input<SIGNAL>& operator>>(SIGNAL& source, Input<SIGNAL>& input) {
 			input << source;
 			return input;
 		}
@@ -1379,7 +1380,7 @@ namespace klang {
 			virtual const SIGNAL& output() const { return out; }
 			virtual SIGNAL& operator>>(SIGNAL& destination) { process(); return destination = out; }
 
-			virtual operator SIGNAL() { process(); return out; }
+			virtual operator const SIGNAL&() { process(); return out; }
 
 			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + SIGNAL(other); }
 			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * SIGNAL(other); }
@@ -1423,11 +1424,17 @@ namespace klang {
 
 		template<typename SIGNAL> 
 		struct Generator : public Output<SIGNAL> { 
+			using Output<SIGNAL>::out;
+
 			// inline parameter(s) support
 			template<typename... params>
 			Output<SIGNAL>& operator()(params... p) {
 				set(p...); return *this;
 			}
+
+			using Output<SIGNAL>::operator>>;
+			using Output<SIGNAL>::process;
+			operator const SIGNAL& () override { process(); return out; } // return last output		
 
 		protected:
 			virtual void set(param p) { };
@@ -1444,7 +1451,7 @@ namespace klang {
 			using Output<SIGNAL>::out;
 
 			// signal processing (input-output)
-			operator SIGNAL() override { process(); return out; } // return last output
+			operator const SIGNAL&() override { process(); return out; } // return last output
 			virtual void process() override { out = in; }
 
 			// inline parameter(s) support
@@ -1508,7 +1515,13 @@ namespace klang {
 		return *this;
 	}
 
-	inline Modifier& operator>>(signal input, Modifier& modifier) {
+	template<typename TYPE>
+	inline Modifier& operator>>(TYPE& input, Modifier& modifier) {
+		modifier << input;
+		return modifier;
+	}
+
+	inline Modifier& operator>>(float input, Modifier& modifier) {
 		modifier << input;
 		return modifier;
 	}
@@ -1551,7 +1564,7 @@ namespace klang {
 			return destination = out = tap(time);
 		}
 
-		virtual operator signal () override {
+		virtual operator const signal& () override {
 			return out = tap(time);
 		}
 
@@ -1838,7 +1851,7 @@ namespace klang {
 		}
 
 		// Retrieve value at time (in seconds)
-		signal at(param time) {
+		signal at(param time) const {
 			if (points.empty()) return 0;
 			Point last = { 0, points[0].y };
 			for (const Point& point : points) {
@@ -2070,10 +2083,15 @@ namespace klang {
 			OSCILLATOR::process();
 			OSCILLATOR::out *= env++ * amp;
 		}
+
+		inline const signal& operator>>(Operator& carrier) {
+			carrier << *this;
+			return carrier;
+		}
 	};
 
 	template<class OSCILLATOR>
-	inline signal operator>>(klang::signal modulator, Operator<OSCILLATOR>& carrier) {
+	inline const signal& operator>>(klang::signal modulator, Operator<OSCILLATOR>& carrier) {
 		carrier << modulator;
 		return carrier;
 	}
@@ -2935,7 +2953,7 @@ namespace klang {
 					state = (offset.position - increment.amount) < duty.position ? Up : Down;
 					f = delta;
 					omf = 1.f - f;
-					rcpf = 2.f * (rcpf = 1.f / f);
+					rcpf2 = 2.f * (rcpf = 1.f / f);
 					col = duty;
 
 					c1 = 1.f / col;
@@ -3047,16 +3065,14 @@ namespace klang {
 			struct Osm : public Oscillator {
 				const float _Duty;
 
-				Osm(OSM::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) { }
+				Osm(OSM::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) { osm.setDuty(_Duty); }
 
 				void set(param frequency) {
 					osm.set(frequency);
-					osm.setDuty(_Duty);
 				}
 
 				void set(param frequency, param phase) {
 					osm.set(frequency, phase);
-					osm.setDuty(_Duty);
 				}
 
 				void set(param frequency, param phase, param duty) {
@@ -3120,11 +3136,19 @@ namespace klang {
 					float f = 0; 		// cutoff f
 					//float shelf = 1;	// shelving gain
 
-					float /*a0 = 1*/ a1 = 0, b0 = 0, b1 = 0; //coefficients
+					float /*a0 = 1*/ a1 = 0, b0 = 1, b1 = 0; //coefficients
 
 					float exp0 = 0;
 					//float tan0 = 0;
 					float z = 0;	// filter state
+
+					void reset() {
+						a1 = 0;
+						b0 = 1;
+						b1 = 0;
+						f = 0;
+						z = 0;
+					}
 
 					void set(param f) {
 						if (Filter::f != f) {
@@ -3144,7 +3168,7 @@ namespace klang {
 				// One-pole, low-pass filter
 				struct LPF : Filter {
 					void init() {
-						const float exp0 = exp(-f * fs.w);
+						const float exp0 = expf(-f * fs.w);
 						b0 = 1 - exp0;
 						a1 = exp0;
 					}
@@ -3156,7 +3180,7 @@ namespace klang {
 				// One-pole, high-pass filter
 				struct HPF : Filter {
 					void init() {
-						const float exp0 = exp(-f * fs.w);
+						const float exp0 = expf(-f * fs.w);
 						b0 = 0.5f * (1.f + exp0);
 						b1 = -b0;
 						a1 = exp0;
@@ -3165,139 +3189,148 @@ namespace klang {
 			};
 
 			// Transposed Direct Form II Biquadratic Filter
-			struct Biquad : Modifier
-			{
-				float f = 0; 	// cutoff/centre f
-				float Q = 0;	// Q (resonance)
+			namespace Biquad {
 
-				float /*a0 = 1*/ a1 = 0, a2 = 0, b0 = 1, b1 = 0, b2 = 0; // coefficients
+				struct Filter : Modifier
+				{
+					float f = 0; 	// cutoff/centre f
+					float Q = 0;	// Q (resonance)
 
-				float a = 0;		// alpha
-				float cos0 = 1;		// cos(omega)
-				float sin0 = 0;		// sin(omega)
-				float z[2] = { 0 };	// filter state
+					float /*a0 = 1*/ a1 = 0, a2 = 0, b0 = 1, b1 = 0, b2 = 0; // coefficients
 
-				void set(param f, param Q) {
-					if (Biquad::f != f || Biquad::Q != Q) {
-						Biquad::f = f;
-						Biquad::Q = Q;
+					float a = 0;		// alpha
+					float cos0 = 1;		// cos(omega)
+					float sin0 = 0;		// sin(omega)
+					float z[2] = { 0 };	// filter state
 
-						const float w = f * fs.w;
-						cos0 = cosf(w);
-						sin0 = sinf(w);
-
-						if (Q < 0.5) Q = 0.5;
-						a = sin0 / (2.f * Q);
-						init();
+					void reset() {
+						f = 0;
+						Q = 0;
+						b0 = 1;
+						a1 = a2 = b1 = b2 = 0;
+						a = 0;
+						z[0] = z[1] = 0;
 					}
-				}
 
-				virtual void init() = 0;
+					void set(param f, param Q) {
+						if (Filter::f != f || Filter::Q != Q) {
+							Filter::f = f;
+							Filter::Q = Q;
 
-				void process() noexcept {
-					// transposed Direct Form II	
-					const float z0 = z[0];
-					const float z1 = z[1];
-					const float y = b0 * in + z0;
-					z[0] = b1 * in - a1 * y + z1;
-					z[1] = b2 * in - a2 * y;
-					out = y;
-				}
-			};
+							const float w = f * fs.w;
+							cos0 = cosf(w);
+							sin0 = sinf(w);
 
-			// Low-pass filter (RBJ)
-			struct LPF : Biquad {
-				void init(){	
-					// simple LPF (RBJ)	
-					constant a0 = {  1.f + a };
-					a1 = a0.inv * (- 2.f * cos0);
-					a2 = a0.inv * (1.f - a);
+							if (Q < 0.5) Q = 0.5;
+							a = sin0 / (2.f * Q);
+							init();
+						}
+					}
 
-					b2 = b0 = a0.inv * (1.f - cos0) * 0.5f;
-					b1 =	  a0.inv * (1.f - cos0);
-				}
-			};
+					virtual void init() = 0;
 
-			typedef LPF HCF; // = High-cut Filter
-			typedef LPF HRF; // = High-reject Filter
-
-			// High-pass filter (RBJ)
-			struct HPF : Biquad {
-				void init() {
-					// simple HPF (RBJ)	
-					constant a0 = { 1.f + a };
-					a1 = a0.inv * (-2.f * cos0);
-					a2 = a0.inv * (1.f - a);
-
-					b2 = b0 = a0.inv * (1.f + cos0) * 0.5f;
-					b1 =      a0.inv * -(1.f + cos0);
-				}
-			};
-
-			typedef HPF LCF; // = Low-cut Filter
-			typedef HPF LRF; // = Low-reject Filter
-
-			// Biquad Band-pass Filter (RBJ)
-			struct BPF : Biquad {
-				enum Gain {
-					ConstantSkirtGain,
-					ConstantPeakGain
+					void process() noexcept {
+						const float z0 = z[0];
+						const float z1 = z[1];
+						const float y = b0 * in + z0;
+						z[0] = b1 * in - a1 * y + z1;
+						z[1] = b2 * in - a2 * y;
+						out = y;
+					}
 				};
 
-				BPF& operator=(Gain gain) {
-					init_gain = gain == ConstantSkirtGain ? &BPF::init_skirt : &BPF::init_peak;
-					init();
-					return *this;
-				}
+				// Low-pass filter (RBJ)
+				struct LPF : Filter {
+					void init() {
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
 
-				using Init = void(BPF::*)(void);
-				Init init_gain = &BPF::init_peak;
-				void init() { (this->*init_gain)(); }
+						b2 = b0 = a0.inv * (1.f - cos0) * 0.5f;
+						b1 = a0.inv * (1.f - cos0);
+					}
+				};
 
-				// constant skirt gain
-				void init_skirt() {
-					constant a0 = { 1.f + a };
-					a1 = a0.inv * (-2.f * cos0);
-					a2 = a0.inv * (1.f - a);
+				typedef LPF HCF; // = High-cut Filter
+				typedef LPF HRF; // = High-reject Filter
 
-					b0 = a0.inv * sin0 * 0.5f;
-					b1 = 0;
-					b2 = -b0;
-				}
+				// High-pass filter (RBJ)
+				struct HPF : Filter {
+					void init() {
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
 
-				void init_peak() {
-					// constant peak gain
-					constant a0 = { 1.f + a };
-					a1 = a0.inv * (-2.f * cos0);
-					a2 = a0.inv * (1.f - a);
+						b2 = b0 = a0.inv * (1.f + cos0) * 0.5f;
+						b1 = a0.inv * -(1.f + cos0);
+					}
+				};
 
-					b0 = a0.inv * a;
-					b1 = 0;
-					b2 = a0.inv * -a;
-				}
-			};
+				typedef HPF LCF; // = Low-cut Filter
+				typedef HPF LRF; // = Low-reject Filter
 
-			// Band-reject (notch) Filter 
-			struct BRF : Biquad {
-				void init() {
-					constant a0 = { 1.f + a };
-					b1 = a1 = a0.inv * (-2.f * cos0);
-					a2 =      a0.inv * (1.f - a);
-					b0 = b2 = a0.inv;
-				}
-			};
+				// Biquad Band-pass Filter (RBJ)
+				struct BPF : Filter {
+					enum Gain {
+						ConstantSkirtGain,
+						ConstantPeakGain
+					};
 
-			typedef BRF BSF; // = Band-stop Filter
+					BPF& operator=(Gain gain) {
+						init_gain = gain == ConstantSkirtGain ? &BPF::init_skirt : &BPF::init_peak;
+						init();
+						return *this;
+					}
 
-			// All-pass filter (APF)
-			struct APF : Biquad {
-				void init() {
-					constant a0 = { 1.f + a };
-					b1 = a1 = a0.inv * (-2.f * cos0);
-					b0 = a2 = a0.inv * (1.f - a);
-					b2 = 1.f;
-				}
-			};
+					using Init = void(BPF::*)(void);
+					Init init_gain = &BPF::init_peak;
+					void init() { (this->*init_gain)(); }
+
+					// constant skirt gain
+					void init_skirt() {
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+
+						b0 = a0.inv * sin0 * 0.5f;
+						b1 = 0;
+						b2 = -b0;
+					}
+
+					void init_peak() {
+						// constant peak gain
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+
+						b0 = a0.inv * a;
+						b1 = 0;
+						b2 = a0.inv * -a;
+					}
+				};
+
+				// Band-reject (notch) Filter 
+				struct BRF : Filter {
+					void init() {
+						constant a0 = { 1.f + a };
+						b1 = a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+						b0 = b2 = a0.inv;
+					}
+				};
+
+				typedef BRF BSF; // = Band-stop Filter
+
+				// All-pass filter (APF)
+				struct APF : Filter {
+					void init() {
+						constant a0 = { 1.f + a };
+						b1 = a1 = a0.inv * (-2.f * cos0);
+						b0 = a2 = a0.inv * (1.f - a);
+						b2 = 1.f;
+					}
+				};
+			}
 		}
 	}
 
@@ -3305,32 +3338,16 @@ namespace klang {
 		using namespace klang;
 
 		using namespace Generators::Basic;
-		//using Generators::Basic::Sine;
-		//using Generators::Basic::Saw;
-		//using Generators::Basic::Triangle;
-		//using Generators::Basic::Square;
-		//using Generators::Basic::Pulse;
-		//using Generators::Basic::Noise;
-
 		using namespace Filters::Basic;
-		//using Filters::Basic::LPF;
-		//using Filters::Basic::HPF;
+		using namespace Filters::Basic::Biquad;
 	};
 
 	namespace optimised {
 		using namespace klang;
 
 		using namespace Generators::Fast;
-		//using Generators::Fast::Sine;
-		//using Generators::Fast::Saw;
-		//using Generators::Fast::Triangle;
-		//using Generators::Fast::Square;
-		//using Generators::Fast::Pulse;
-		//using Generators::Fast::Noise;
-
 		using namespace Filters::Basic;
-		//using Filters::Basic::LPF;
-		//using Filters::Basic::HPF;
+		using namespace Filters::Basic::Biquad;
 	};
 
 	namespace minimal {

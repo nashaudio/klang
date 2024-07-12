@@ -6,7 +6,7 @@ float cubic(float x) { return x * x * x; }
 
 struct Banjo : Synth {
 	float playingNotes = 0;
-	LPF filter;
+	IIR filter;
 	HPF dcfilter;
 	const float normalise;
 	
@@ -27,7 +27,7 @@ struct Banjo : Synth {
 			
 		struct Resonator : Modifier {
 			Delay<44100> delay;
-			LPF filter;
+			IIR filter;
 			param gain;
 			
 			void process() {
@@ -41,7 +41,7 @@ struct Banjo : Synth {
 		
 		// Note On
 		event on(Pitch pitch, Amplitude velocity) {	
-			param f = ((pitch - 12)> Type::Frequency);		
+			param f = (pitch - 12) -> Frequency;
 			param delay = 1/f * klang::fs;// - 1.5;
 					
 			synth = (Banjo*)getSynth();
