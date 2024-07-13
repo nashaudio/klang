@@ -190,9 +190,9 @@ namespace klang {
 		float value;
 
 		signal(constant initial) : value(initial.f) { }
-		signal(float initial = 0.f) : value(initial) { }
-		signal(double initial) : value((float)initial) { }
-		signal(int value) : value((float)value) { }
+		signal(const float initial = 0.f) : value(initial) { }
+		signal(const double initial) : value((const float)initial) { }
+		signal(const int value) : value((const float)value) { }
 
 		const signal& operator<<(const signal& input) {
 			value = input;
@@ -250,15 +250,28 @@ namespace klang {
 		operator const float() const {	return value; }
 		operator float&() {				return value; }
 
+		//template<typename... Args>
+		//signal operator>>(float(*Function)(float)) const {
+		//	return Function(value);
+		//}
+
 		int channels() const { return 1; }
 
 		relative operator+() const;
 		relative relative() const;
 	};
 
-	inline signal operator^(float x, const signal& y) { return power(x, y.value); }
-	inline signal operator^(double x, const signal& y) { return power(x, y.value); }
-	inline signal operator^(int x, const signal& y) { return power(x, y.value); }
+	//inline signal operator^(float x, const signal& y) { return power(x, y.value); }
+	//inline signal operator^(double x, const signal& y) { return power(x, y.value); }
+	//inline signal operator^(int x, const signal& y) { return power(x, y.value); }
+
+	inline signal operator>>(signal& x, float(*Function)(float)) {
+		return Function(x);
+	}
+
+	inline signal operator>>(const signal& x, float(*Function)(float)) {
+		return Function(x.value);
+	}
 
 #define IS_SIMPLE_TYPE(type)																					\
 	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
@@ -351,6 +364,9 @@ namespace klang {
 		signals operator/(int x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] /= x; return s; }
 	};
 
+	inline signal sqrt(signal& x) { return sqrtf(signal(x)); }		// may trigger process()
+	inline signal sqrt(const signal& x) { return sqrtf(x.value); }	// won't trigger process() (e.g. if already triggered)
+
 	struct increment {
 		float amount;
 		const float size;
@@ -367,10 +383,11 @@ namespace klang {
 
 	// signal used as a control parameter (possibly at audio rate)
 	struct param : public signal {
-		using signal::signal;
+		//using signal::signal;	
 		param(constant in) : signal(in.f) { }
-		param(float initial = 0.f) : signal(initial) { }
+		param(const float initial = 0.f) : signal(initial) { }
 		param(const signal& in) : signal(in) { }
+		param(signal& in) : signal(in) { }
 
 		param& operator+=(const increment& increment) {
 			value += increment.amount;
@@ -488,7 +505,7 @@ namespace klang {
 	struct Phase : public param {
 		//INFO("Phase", 0.f, 0.f, 1.0f)
 		using param::param;
-		Phase(float p = 0.f) : param(p) { };
+		/*Phase(const float p = 0.f) : param(p) { };*/
 
 		param& operator+=(float increment) {
 			if (increment >= (2 * pi))
@@ -527,8 +544,8 @@ namespace klang {
 		//INFO("Pitch", 60.f, 0.f, 127.f)
 		using param::param;
 		
-		Pitch(float p = 60.f) : param(p) { };
-		Pitch(int p) : param((float)p) { };
+		//Pitch(float p = 60.f) : param(p) { };
+		//Pitch(int p) : param((float)p) { };
 
 		// convert note number to pitch class and octave (e.g. C#5)
 		const char* text() const {
@@ -646,10 +663,10 @@ namespace klang {
 
 		signal value;           // current control value;
 
+		operator signal& () { return value; }
 		operator const signal&() const { return value; }
-		operator signal&() { return value; }
-
-		operator float() const { return value.value; }
+		operator const param() const { return value; }
+		operator const float() const { return value.value; }
 	};
 
 	const Control::Size Automatic = { -1, -1, -1, -1 };
@@ -693,8 +710,8 @@ namespace klang {
 		}
 
 		void operator= (const Controls& controls) {
-			for (int c = 0; c < 128 && controls(c).type != Control::NONE; c++)
-				operator+=(controls(c));
+			for (int c = 0; c < 128 && controls[c].type != Control::NONE; c++)
+				operator+=(controls[c]);
 		}
 
 		void operator=(std::initializer_list<Control> controls) {
@@ -715,8 +732,8 @@ namespace klang {
 		//float& operator[](int index) { return items[index].value; }
 		//signal operator[](int index) const { return items[index].value; }
 
-		Control& operator()(int index) { return items[index]; }
-		Control operator()(int index) const { return items[index]; }
+		//Control& operator()(int index) { return items[index]; }
+		//Control operator()(int index) const { return items[index]; }
 	};
 
 	typedef Array<float, 128> Values;
@@ -765,10 +782,23 @@ namespace klang {
 	
 	class buffer {
 	protected:
+		constexpr unsigned int capacity(unsigned int n) {
+			// Decrement n to handle the case where n is already a power of 2
+			n--;
+			n |= n >> 1;
+			n |= n >> 2;
+			n |= n >> 4;
+			n |= n >> 8;
+			n |= n >> 16;
+			// Increment n to get the next power of 2
+			n++;
+			return n;
+		}
+		const unsigned int mask = 0xFFFFFFFF;
+		const bool owned = false;
 		float* samples;
 		signal* ptr;
-		signal* end;
-		bool owned = false;
+		signal* end;	
 	public:
 		const int size;
 
@@ -778,14 +808,14 @@ namespace klang {
 		}
 
 		buffer(float* buffer, int size, float initial)
-		: samples(buffer), size(size) { 
+		: samples(buffer), size(size) {
 			rewind();
 			set(initial);
 		}
 
 		buffer(int size, float initial = 0)
-		: samples(new float[size]), owned(true), size(size) {
-			samples = new float[size];
+		: samples(new float[capacity(size)]), owned(true), size(size), mask(capacity(size)-1) {
+			samples = new float[capacity(size)];
 
 			rewind();
 			set(initial);
@@ -821,7 +851,7 @@ namespace klang {
 		}
 
 		signal& operator[](int offset) {
-			return *(signal*)&samples[offset];
+			return *(signal*)&samples[offset & mask]; // owned array can't write beyond allocation
 		}
 
 		signal operator[](float offset) {
@@ -846,8 +876,16 @@ namespace klang {
 			return *ptr;
 		}
 
-		operator bool() const {
-			return ptr < end;
+		operator const signal& () const {
+			return *ptr;
+		}
+
+		//operator bool() const {
+		//	return ptr < end;
+		//}
+
+		bool finished() const {
+			return ptr == end;
 		}
 
 		signal& operator++(int) {
@@ -1452,6 +1490,7 @@ namespace klang {
 
 			// signal processing (input-output)
 			operator const SIGNAL&() override { process(); return out; } // return last output
+			//operator const float () const { return operator const SIGNAL&(); }
 			virtual void process() override { out = in; }
 
 			// inline parameter(s) support
@@ -1529,21 +1568,26 @@ namespace klang {
 	template<int SIZE>
 	class Delay : public Modifier {
 	protected:
-		float buffer[SIZE];
-		const int size = SIZE;
+		buffer buffer;
+		//float buffer[SIZE];
+		//const int size = SIZE;
 		float time = 1;
 		int position = 0;
 	public:
-		Delay() { clear(); }
+		Delay() : buffer(SIZE + 1, 0) { clear(); }
 
 		void clear() {
-			memset(buffer, 0, sizeof(float) * SIZE);
+			buffer.clear();
+			//memset(buffer, 0, sizeof(float) * SIZE);
 		}
 
 		void operator<<(const signal& input) override {
-			buffer[position] = Delay::in = input;
-			if(++position == SIZE)
+			buffer++ = Delay::in = input;
+			position++;
+			if (buffer.finished()) {
+				buffer.rewind();
 				position = 0;
+			}
 		}
 
 		signal tap(float delay) const {
@@ -1551,11 +1595,11 @@ namespace klang {
 			if (read < 0.f)
 				read += SIZE;
 
-			float f = floor(read);
+			const float f = floor(read);
 			delay = read - f;
 
-			int i = (int)read;
-			int j = (i == (SIZE - 1)) ? 0 : (i + 1);
+			const int i = (int)read;
+			const int j = (i == (SIZE - 1)) ? 0 : (i + 1);
 			
 			return buffer[i] * (1.f - delay) + buffer[j] * delay;
 		}
@@ -2140,7 +2184,7 @@ namespace klang {
 		virtual void process() { out = in; }
 		virtual void process(buffer buffer) {
 			prepare();
-			while (buffer) {
+			while (!buffer.finished()) {
 				input(buffer);
 				process();
 				buffer++ = out;
@@ -2224,7 +2268,7 @@ namespace klang {
 		virtual void process() override = 0;
 		virtual bool process(buffer buffer) {
 			prepare();
-			while (buffer) {
+			while (!buffer.finished()) {
 				process();
 				buffer++ = out;
 				debug.buffer++;
@@ -2501,7 +2545,7 @@ namespace klang {
 
 			operator const signal() const { return { left, right }; }
 			operator frame () {				return { left, right }; }
-			operator bool() const {			return left.operator bool() && right.operator bool(); }
+			bool finished() const {			return left.finished() && right.finished(); }
 			frame operator++(int) {			return { left++, right++ };	}
 
 			frame operator=(const signal& in) {
@@ -2559,7 +2603,7 @@ namespace klang {
 			virtual void process() { out = in; };
 			virtual void process(Stereo::buffer buffer) {
 				prepare();
-				while (buffer) {
+				while (!buffer.finished()) {
 					input(buffer);
 					process();
 					buffer++ = out;
@@ -2578,7 +2622,7 @@ namespace klang {
 			virtual void process() override = 0;
 			virtual bool process(Stereo::buffer buffer) {
 				prepare();
-				while (buffer) {
+				while (!buffer.finished()) {
 					process();
 					buffer++ = out;
 				}
@@ -3184,6 +3228,20 @@ namespace klang {
 						b0 = 0.5f * (1.f + exp0);
 						b1 = -b0;
 						a1 = exp0;
+					}
+				};
+			};
+
+			namespace Butterworth {
+				struct LPF : OnePole::Filter {
+					void init() {
+						const float c = 1.f / tanf(pi * f * fs.inv);
+						//constant a0 = { 1.f / (1.f + c) };
+						//b0 = b1 = 1.f;
+						a1 = (1.f - c) / (1.f + c); // = (1-c) / a0
+					}
+					void process() {
+						out = in + z + a1 * out + DENORMALISE;
 					}
 				};
 			};

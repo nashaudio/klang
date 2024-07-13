@@ -35,35 +35,39 @@ public:
         memcpy(outputBuffers[1], inputBuffers[1], numSamples * sizeof(float));
 
         if (effect) {
-            // wrap in klang buffer
-            klang::buffer buffer[] = {
-                { outputBuffers[0], numSamples },
-                { outputBuffers[1], numSamples },
-            };
-
             const int nbParameters = std::min(parameters.count, effect.controls());
             for (int p = 0; p < nbParameters; p++)
                 effect.control(p) = parameters[p];
 
-            klang::Debug::Session kdb(outputBuffers[2], numSamples, klang::Debug::Buffer::Effect);
+            // wrap in klang buffer
+            klang::buffer buffers[] = {
+                { outputBuffers[0], numSamples },
+                { outputBuffers[1], numSamples },
+            };
+
+            klang::Debug::Session kdbg(nullptr, numSamples, klang::Debug::Buffer::Effect);
 
             // apply audio processing (stereo)
             if (effect.isMono()) {
-                effect.mono->process(buffer[0]);
-                buffer[1] = buffer[0];
+                effect.mono->process(buffers[0]);
+                buffers[1] = buffers[0];
             } else if (effect.isStereo()) {
+                klang::stereo::buffer buffer = { buffers[0], buffers[1] };
                 effect.stereo->process(buffer);
             }
 
             debug.reset();
-            if (kdb.isActive()) {
-                debug.buffer = kdb.buffer();
+            if (kdbg.hasAudio()) {
+                debug.buffer = kdbg.getAudio();
                 debug.size = numSamples;
             }
             if (klang::graph.isActive())
                 debug.graph = &klang::graph;
             if (klang::debug.console.length)
                 debug.console = &klang::debug.console;
+
+            for (int p = 0; p < nbParameters; p++)
+                parameters[p] = effect.control(p);
         }
     }
     
@@ -86,7 +90,7 @@ private:
         operator bool() const { return mono || stereo; }
 
         unsigned int controls() { return isMono() ? mono->controls.count : stereo->controls.count; }
-        float& control(int index) { return isMono() ? mono->controls[index] : stereo->controls[index]; }
+        float& control(int index) { return isMono() ? mono->controls[index].value : stereo->controls[index].value; }
 
         klang::mono::Effect* mono = nullptr;
         klang::stereo::Effect* stereo = nullptr;
