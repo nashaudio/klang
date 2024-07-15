@@ -1,101 +1,47 @@
 #include <klang.h>
-using namespace klang::basic;
-
-float square(float x){
-	return x*x;
-}
-
-struct Follower1 : Modifier {
-	Butterworth::LPF filter;
-	signal level = 0;
-	
-	
-	Follower1() { filter.set(1); }
-	
-	void process() {
-		in >> square >> filter >> sqrt >> out;
-	}
-};
-
-template<int WINDOW>
-struct Follower : Modifier
-{
-	buffer buffer;
-	signal sum = 0;
-	static constexpr constant window = { WINDOW };
-	Follower() : buffer(WINDOW, 0) { }
-	
-	void process()
-	{
-		sum -= buffer;
-		in * in >> buffer;
-		sum += buffer++;
-		if(buffer.finished())
-			buffer.rewind();
-		sum * window.inv >> sqrt >> out;
-	}
-};
-
-struct Peak : Modifier {
-	param attack;
-	param release;
-	
-	param A,R;
-	
-	Peak() { set(0.01f, 0.1f); }
-	
-    void set(param attack, param release) {
-    	if(Peak::attack != attack || Peak::release != release){
-        	A = attack == 0.f ? 1.f : std::exp(-1.0f / (fs * attack));
-        	R = release == 0.f ? 1.f : std::exp(-1.0f / (fs * release));
-        }
-    }
-
-    void process() {
-        const float in = abs(Peak::in);
-        const float delta = out - in;
-        if(in > out) 	// attacking
-        	in + A * delta >> out;
-        else 			// releasing
-        	in + R * delta >> out;
-    }
-};
+using namespace klang::optimised;
 
 struct MyEffect : Effect {
 
-	Sine lfo;
-	Peak level;	
-	//Follower<2000> level;	
-	Delay<44100> delay;
+	Envelope::Follower rms;
+	Envelope::Follower peak;
+	Envelope::Follower::Window<2000> window;
+	Envelope::Follower::Window<2000> mean;
 
 	// Initialise plugin (called once at startup)
 	MyEffect() {
-		//square >> graph;
+		peak = Envelope::Follower::Peak;
+		mean = Envelope::Follower::Mean;
 	
 		controls = { 
 			Dial("Gain", 0.0, 1.0, 0.5),
-			Meter("Level")
+			Meter("Level", 0, 1, 0),
+			Menu("Follower", "RMS", "Window", "Peak", "Mean")
 		};
-
-		presets = { 
-			{ "Copied Preset", { 0.500 } },
-		};
-	}
-
-	// Prepare for processing (called once per buffer)
-	void prepare() {
-		//char* ptr = nullptr;
-		//lfo.set(*ptr);		
-		//delay.set(22050);
 	}
 
 	// Apply processing (called once per sample)
 	void process() {
-		//0.5 >> debug;
-		param gain = controls[0];
+		const param gain = controls[0];
 		
-		//in + (in >> delay) >> out;
+		const signal input = in * gain * 2;
+		const signal _rms = input >> rms;
+		const signal _window = input >> window;
+		const signal _peak = input >> peak;
+		const signal _mean = input >> mean;
 		
-		in * gain * 2 >> out >> level >> controls[1] >> debug;
+		
+//		const signal dp = _peak2 - _rms + 0.5;
+		
+		switch((int)controls[2]){
+		case 0: _rms >> debug;		break;
+		case 1: _window >> debug; 	break;
+		case 2: _peak >> debug;		break;
+		case 3: _mean >> debug;		break;
+//		case 4: dp >> debug;		break;
+		}
+		
+		Amplitude(debug) >> controls[1];	
+		out = input * 0.1; // strink output so envelope (debug) can be seen
 	}
 };

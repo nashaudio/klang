@@ -113,7 +113,7 @@ namespace klang {
 				const double y2 = func2(x, TEST<T>::arg2);
 				if (tolerance == 0 && (y1 != y2))
 					return &x; // failed for f(x) - no tolerance
-				else if (abs(y1 - y2) > tolerance)
+				else if (std::abs(y1 - y2) > tolerance)
 					return &x; // failed for f(x) - above tolerance
 			}
 			return nullptr; // success

@@ -2,7 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
+#include <cmath>
 #include <limits>
 #include <assert.h>
 #include <array>
@@ -13,6 +13,15 @@
 #include <algorithm>
 #include <type_traits>
 #include <mutex>
+#include <functional>
+
+// provide access to original math functions through std:: prefix
+namespace std {
+	namespace klang {
+		template<typename TYPE> TYPE sqrt(TYPE x) { return ::sqrt(x); }
+		template<typename TYPE> TYPE abs(TYPE x) { return ::abs(x); }
+	}
+};
 
 namespace klang {
 	//template<typename Base, typename Derived>
@@ -23,8 +32,6 @@ namespace klang {
 
 	//template<typename Base, typename... Deriveds>
 	//using is_base_of_any_t = typename is_base_of_any<Base, std::tuple<Deriveds...>>::type;
-
-	using namespace std;
 
 	#define DENORMALISE 1.175494e-38f
 
@@ -265,13 +272,21 @@ namespace klang {
 	//inline signal operator^(double x, const signal& y) { return power(x, y.value); }
 	//inline signal operator^(int x, const signal& y) { return power(x, y.value); }
 
-	inline signal operator>>(signal& x, float(*Function)(float)) {
-		return Function(x);
-	}
+	//inline signal operator>>(signal& x, float(*Function)(float)) {
+	//	return Function(x);
+	//}
 
-	inline signal operator>>(const signal& x, float(*Function)(float)) {
-		return Function(x.value);
-	}
+	//inline signal operator>>(const signal& x, float(*Function)(float)) {
+	//	return Function(x.value);
+	//}
+
+	//inline signal operator>>(signal& x, double(*Function)(double)) {
+	//	return Function(x);
+	//}
+
+	//inline signal operator>>(const signal& x, double(*Function)(double)) {
+	//	return Function(x.value);
+	//}
 
 #define IS_SIMPLE_TYPE(type)																					\
 	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
@@ -364,8 +379,8 @@ namespace klang {
 		signals operator/(int x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] /= x; return s; }
 	};
 
-	inline signal sqrt(signal& x) { return sqrtf(signal(x)); }		// may trigger process()
-	inline signal sqrt(const signal& x) { return sqrtf(x.value); }	// won't trigger process() (e.g. if already triggered)
+	//inline signal sqrt(signal& x) { return sqrtf(signal(x)); }		// may trigger process()
+	//inline signal sqrt(const signal& x) { return sqrtf(x.value); }	// won't trigger process() (e.g. if already triggered)
 
 	struct increment {
 		float amount;
@@ -612,14 +627,27 @@ namespace klang {
 			value = power(10, db.value * 0.05f); // 10 ^ (db * 0.05f);
 		};
 
-		dB operator >> (dB) const {
-			return 20.f * log10f(value);
-		}
+		//dB operator >> (dB) const {
+		//	return 20.f * log10f(value);
+		//}
 		//operator dB() const {
 		//	return 20.f * log10f(value);
 		//}
+
+		const Amplitude* operator->() const {
+			dB.amplitude = value;
+			return this;
+		}
+
+		thread_local static struct Convert {
+			float amplitude;
+			operator float() {
+				return 20.f * log10f(amplitude);
+			}
+		} dB;
 	};
 
+	thread_local inline Amplitude::Convert Amplitude::dB;
 	typedef Amplitude Velocity;
 
 	struct Control
@@ -880,9 +908,9 @@ namespace klang {
 			return *ptr;
 		}
 
-		//operator bool() const {
-		//	return ptr < end;
-		//}
+		explicit operator double() const {
+			return *ptr;
+		}
 
 		bool finished() const {
 			return ptr == end;
@@ -1016,10 +1044,19 @@ namespace klang {
 				buffer::operator+=(in);
 				return *this;
 			}
+
+			signal& operator>>(signal& destination) const {
+				destination << *ptr;
+				return destination;
+			}
+
+			operator signal() const {
+				return *ptr;
+			}
 		};
 		
 		thread_local static Buffer buffer; // support multiple threads/instances
-		
+
 		Console console;
 
 		template <typename Func, typename... Args>
@@ -1082,6 +1119,10 @@ namespace klang {
 		int getText(char* buffer) {
 			return console.getText(buffer);
 		}
+
+		operator signal() const {
+			return buffer.operator klang::signal();
+		}
 	};
 
 	inline static Debug::Buffer& operator>>(const signal source, Debug& debug) {
@@ -1097,19 +1138,19 @@ namespace klang {
 	inline thread_local Debug::Buffer Debug::buffer; //
 	inline std::mutex Console::_lock;
 
-	template<typename TYPE>
-	struct FunctionType {
-		using Type = TYPE;
-		using Pointer = TYPE(*)(TYPE);
+	//template<typename TYPE>
+	//struct FunctionType {
+	//	using Type = TYPE;
+	//	using Pointer = TYPE(*)(TYPE);
 
-		FunctionType(Pointer f) : function(f) { }
-		Pointer function;
-	};
+	//	FunctionType(Pointer f) : function(f) { }
+	//	Pointer function;
+	//};
 
-	template<typename T>
-	static FunctionType<T> Function(T(*func)(T)) {
-		return FunctionType<T>(func);
-	}
+	//template<typename T>
+	//static FunctionType<T> Function(T(*func)(T)) {
+	//	return FunctionType<T>(func);
+	//}
 
 #ifndef GRAPH_SIZE
 #define GRAPH_SIZE 44100
@@ -1565,12 +1606,61 @@ namespace klang {
 		return modifier;
 	}
 
+	template<typename... Args>
+	struct Function : public Generic::Modifier<signal> {
+
+		std::function<float(Args...)> function;
+
+		template <typename FunctionType>
+		Function(FunctionType&& function)
+		: function(std::forward<FunctionType>(function)) {}
+
+		// Function call operator to invoke the stored callable
+		inline float operator()(Args... args) const {
+			return function(std::forward<Args>(args)...);
+		}
+
+		void process() override {
+			out = function(in);
+		}
+
+		/*using Type = TYPE;
+		using Pointer = TYPE(*)(TYPE);
+		 
+		Pointer function;
+
+		std::function<ReturnType(Args...)> func_;
+
+		Function(Pointer function) : function(function) { }
+
+		void process() override {
+			out = function(in);
+		}
+
+		inline float operator()(float x) const {return function(x); }*/
+	};
+
+	inline static Function<float> sqrt(::sqrtf);
+	inline static Function<float> sqr([](float x) -> float { return x * x; });
+	inline static Function<float> abs(::fabsf);
+
+	#define sqrt klang::sqrt // avoid conflict with std::sqrt
+	#define abs klang::abs   // avoid conflict with std::abs
+
+	inline static Function<float>& operator>>(signal& source, Function<float>& function) {
+		function << source;
+		return function;
+	}
+
+	inline static Function<float>& operator>>(const signal& source, Function<float>& function) {
+		function << source.value;
+		return function;
+	}
+
 	template<int SIZE>
 	class Delay : public Modifier {
 	protected:
 		buffer buffer;
-		//float buffer[SIZE];
-		//const int size = SIZE;
 		float time = 1;
 		int position = 0;
 	public:
@@ -1578,7 +1668,6 @@ namespace klang {
 
 		void clear() {
 			buffer.clear();
-			//memset(buffer, 0, sizeof(float) * SIZE);
 		}
 
 		void operator<<(const signal& input) override {
@@ -1629,7 +1718,7 @@ namespace klang {
 		buffer buffer;
 		const int size;
 	public:
-		Wavetable(int size = 2048) : buffer(size), size(size)/*, Oscillator((float)size)*/ { }
+		Wavetable(int size = 2048) : buffer(size), size(size) { }
 
 		template<typename TYPE>
 		Wavetable(TYPE oscillator, int size = 2048) : buffer(size), size(size) {
@@ -1700,6 +1789,9 @@ namespace klang {
 		using Generator::set;
 
 	public:
+
+		struct Follower;
+
 		// Abstract envelope ramp type (override to support different point-to-point trajectories)
 		struct Ramp : public Generator {
 			float target;
@@ -2068,6 +2160,9 @@ namespace klang {
 	};
 
 	struct ADSR : public Envelope {
+	private:
+		using Envelope::Follower;
+	public:
 		param A, D, S, R;
 
 		enum Mode { Time, Rate } mode = Time;
@@ -3236,12 +3331,13 @@ namespace klang {
 				struct LPF : OnePole::Filter {
 					void init() {
 						const float c = 1.f / tanf(pi * f * fs.inv);
-						//constant a0 = { 1.f / (1.f + c) };
-						//b0 = b1 = 1.f;
-						a1 = (1.f - c) / (1.f + c); // = (1-c) / a0
+						constant a0 = { 1.f + c };
+						b0 = a0.inv;  // b0 == b1
+						a1 = (1.f - c) * a0.inv; // = (1-c) / a0
 					}
 					void process() {
-						out = in + z + a1 * out + DENORMALISE;
+						out = b0 * (in + z) - a1 * out;// +DENORMALISE;
+						z = in;
 					}
 				};
 			};
@@ -3392,12 +3488,105 @@ namespace klang {
 		}
 	}
 
+	// Envelope Followers
+	struct Envelope::Follower : Modifier {
+
+		// Attack / Release IIR Filter (~Butterworth when attack == release)
+		struct AR : Modifier {
+			param attack = 0;
+			param release = 0;
+
+			param A = 1, R = 1;
+
+			void set(param attack, param release) {
+				if (AR::attack != attack || AR::release != release) {
+					AR::attack = attack;
+					AR::release = release;
+					A = 1.f - (attack == 0.f ? 0.f : expf(-1.0f / (fs * attack)));
+					R = 1.f - (release == 0.f ? 0.f : expf(-1.0f / (fs * release)));
+				}
+			}
+
+			void process() {
+				const float smoothing = in > out ? A : R;
+				(out + smoothing * (in - out)) >> out;
+			}
+		} ar;
+			 
+		enum Mode { Peak, RMS, Mean = 0 };
+		
+		// Peak / RMS Envelope Follower (default; filter-based)
+		Follower() { set(0.01f, 0.1f); }
+		void set(param attack, param release) {
+			ar.set(attack, release);
+		}
+
+		Follower& operator=(Mode mode) {
+			_process = (mode == Peak) ? &Follower::peak : &Follower::rms;
+			return *this;
+		}
+
+		using Process = void(Follower::*)();
+		Process _process = &Follower::rms;
+
+		void process() {	(this->*_process)();	}
+
+		void peak() {	abs(in) >> ar >> out;					}
+		void rms() {	(in * in) >> ar >> sqrt >> out;		}
+
+		// Average/RMS Envelope Follower (windowed/moving average)
+		template<int WINDOW>
+		struct Window : Modifier
+		{
+			AR ar;
+			buffer buffer;
+			double sum = 0; // NB: must be 64-bit to avoid rounding errors
+			static constexpr constant window = { WINDOW };
+
+			Window() : buffer(WINDOW, 0) {
+				set(0.01f, 0.1f);
+			}
+
+			void set(param attack, param release) {
+				ar.set(attack, release);
+			}
+
+			Window& operator=(Follower::Mode mode) {
+				_process = (mode == Mean) ? &Window::mean : &Window::rms;
+				return *this;
+			}
+
+			using Process = void(Window::*)();
+			Process _process = &Window::rms;
+
+			void process() { (this->*_process)(); }
+
+			void mean() { 
+				sum -= double(buffer);
+				abs(in) >> buffer;
+				sum += double(buffer++);
+				if (buffer.finished())
+					buffer.rewind();
+				sum * window.inv >> ar >> out;
+			}
+			void rms() {  
+				sum -= double(buffer);
+				(in * in) >> buffer;
+				sum += double(buffer++);
+				if (buffer.finished())
+					buffer.rewind();
+				sum* window.inv >> sqrt >> ar >> out;
+			}
+		};
+	};
+
+
 	namespace basic {
 		using namespace klang;
 
 		using namespace Generators::Basic;
 		using namespace Filters::Basic;
-		using namespace Filters::Basic::Biquad;
+		using namespace Filters::Basic::Biquad;		
 	};
 
 	namespace optimised {
@@ -3414,5 +3603,4 @@ namespace klang {
 
 	//using namespace optimised;
 };
-
 //using namespace klang;
