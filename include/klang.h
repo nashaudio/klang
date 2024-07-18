@@ -23,6 +23,16 @@ namespace std {
 	}
 };
 
+#define IS_SIMPLE_TYPE(type)																					\
+	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
+	static_assert(!std::has_virtual_destructor_v<type>, "signal has virtual destructor");						\
+	static_assert(std::is_trivially_copyable_v<type>, "signal is not trivially copyable");						\
+	static_assert(std::is_trivially_copy_assignable_v<type>, "signal is not trivially copy assignable");		\
+	static_assert(std::is_trivially_copy_constructible_v<type>, "signal is not trivially copy assignable");		\
+	static_assert(std::is_trivially_destructible_v<type>, "signal is not trivially copy assignable");			\
+	static_assert(std::is_trivially_move_assignable_v<type>, "signal is not trivially copy assignable");		\
+	static_assert(std::is_trivially_move_constructible_v<type>, "signal is not trivially copy assignable");	
+
 namespace klang {
 	//template<typename Base, typename Derived>
 	//struct is_base_of_any : std::false_type {};
@@ -40,9 +50,14 @@ namespace klang {
 
 		const double d;
 		const float f = (float)d;
+		const int i = (int)d;
 		const float inv = (float)(1.0/d);
 
 		operator float() const noexcept { return f; }
+
+		float operator^(float x) const { return pow(f, x); }
+		float operator^(int x) const { return (float)pow(d, x); }
+		float operator^(double x) const { return (float)pow(d, x); }
 	};
 
 #if __cplusplus == 201703L
@@ -165,6 +180,18 @@ namespace klang {
         
 		TYPE& operator[](int index) { return items[index]; }
 		const TYPE& operator[](int index) const { return items[index]; }
+
+		//// Constructor that enables inline initialisation without adding a vtable
+		//template<typename... Args, typename = std::enable_if_t<(sizeof...(Args) <= CAPACITY) && (std::is_constructible<TYPE, Args>::value && ...)>>
+		//Array(Args&&... args) : items{ std::forward<Args>(args)... }, count(sizeof...(Args)) {}
+
+		// Initializer list constructor to handle narrowing conversions
+		Array(std::initializer_list<TYPE> init_list) {
+			count = std::min(static_cast<unsigned int>(init_list.size()), static_cast<unsigned int>(CAPACITY));
+			std::copy_n(init_list.begin(), count, items);
+		}
+
+		Array() = default; // Default constructor to allow empty initialization
 	};
 
 	template<int SIZE>
@@ -288,16 +315,6 @@ namespace klang {
 	//	return Function(x.value);
 	//}
 
-#define IS_SIMPLE_TYPE(type)																					\
-	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
-	static_assert(!std::has_virtual_destructor_v<type>, "signal has virtual destructor");						\
-	static_assert(std::is_trivially_copyable_v<type>, "signal is not trivially copyable");						\
-	static_assert(std::is_trivially_copy_assignable_v<type>, "signal is not trivially copy assignable");		\
-	static_assert(std::is_trivially_copy_constructible_v<type>, "signal is not trivially copy assignable");		\
-	static_assert(std::is_trivially_destructible_v<type>, "signal is not trivially copy assignable");			\
-	static_assert(std::is_trivially_move_assignable_v<type>, "signal is not trivially copy assignable");		\
-	static_assert(std::is_trivially_move_constructible_v<type>, "signal is not trivially copy assignable");	
-
 	static_assert(sizeof(signal) == sizeof(float), "signal != float");
 	IS_SIMPLE_TYPE(signal)
 
@@ -316,6 +333,8 @@ namespace klang {
 			signal value[CHANNELS];
 			struct { signal l, r; };
 		};
+
+		signal mono() const { return (l + r) * 0.5f; }
 
 		signal& operator[](int index) { return value[index]; }
 		const signal& operator[](int index) const { return value[index]; }
@@ -396,6 +415,8 @@ namespace klang {
 		//operator float() const { return amount; }
 	};
 
+	struct Control;
+
 	// signal used as a control parameter (possibly at audio rate)
 	struct param : public signal {
 		//using signal::signal;	
@@ -403,6 +424,7 @@ namespace klang {
 		param(const float initial = 0.f) : signal(initial) { }
 		param(const signal& in) : signal(in) { }
 		param(signal& in) : signal(in) { }
+		param(Control& in); // see Control declaration
 
 		param& operator+=(const increment& increment) {
 			value += increment.amount;
@@ -609,12 +631,25 @@ namespace klang {
 		operator float() { return f; }
 	} fs(44100); // sample rate
 
+	struct Conversion : public signal {
+		using signal::signal;
+//		operator klang::signal& () { return signal; };
+	};
+
+	struct Amplitude;
 	// gain (decibels)
 	struct dB : public param {
 		//INFO("dB", 0.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 
 		dB(float gain = 0.f) : param(gain) { };
+
+		const dB* operator->() {
+			Amplitude = power(10, value * 0.05f);
+			return this;
+		}
+
+		thread_local static Conversion Amplitude;
 	};
 
 	// amplitude (linear gain)
@@ -635,19 +670,15 @@ namespace klang {
 		//}
 
 		const Amplitude* operator->() const {
-			dB.amplitude = value;
+			dB = 20.f * log10f(value);
 			return this;
 		}
 
-		thread_local static struct Convert {
-			float amplitude;
-			operator float() {
-				return 20.f * log10f(amplitude);
-			}
-		} dB;
+		thread_local static Conversion dB;
 	};
 
-	thread_local inline Amplitude::Convert Amplitude::dB;
+	thread_local inline Conversion dB::Amplitude;
+	thread_local inline Conversion Amplitude::dB;
 	typedef Amplitude Velocity;
 
 	struct Control
@@ -689,16 +720,49 @@ namespace klang {
 		Size size;              // position (x,y) and size (height, width) of the control (use AUTO_SIZE for automatic layout)
 		Options options;        // text options for menus and group buttons
 
-		signal value;           // current control value;
+		signal value;           // current control value
+		signal smoothed;				// smoothed control value (filtered)
 
 		operator signal& () { return value; }
 		operator const signal&() const { return value; }
-		operator const param() const { return value; }
-		operator const float() const { return value.value; }
+		operator param() const { return value; }
+		operator float() const { return value.value; }
+
+		static constexpr float smoothing = 0.999f;
+		signal smooth() { return smoothed = smoothed * smoothing + (1.f - smoothing) * value; }
+
+		operator Control*() { return this; }
+
+		Control& set(float x) {
+			value = std::clamp(min, x, max);
+			return *this;
+		}
+
+		Control& operator+=(float x) { value += x; return *this; }
+		Control& operator*=(float x) { value *= x; return *this; }
+		Control& operator-=(float x) { value -= x; return *this; }
+		Control& operator/=(float x) { value /= x; return *this; }
 	};
 
 	const Control::Size Automatic = { -1, -1, -1, -1 };
 	const Control::Options NoOptions;
+
+	struct ControlMap {
+		Control* control;
+
+		ControlMap() : control(nullptr) { };
+		ControlMap(Control& control) : control(&control) { };
+
+		operator Control&() { return *control; }
+		operator signal& () { return control->value; }
+		operator const signal&() const { return control->value; }
+		operator float() const { return control->value; }
+		signal smooth() { return control->smooth(); }
+	};
+
+	IS_SIMPLE_TYPE(Control);
+
+	inline param::param(Control& in) : signal(in.value) { }
 
 	inline static Control Dial(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Control::ROTARY, min, max, initial, Automatic, NoOptions, initial };	}
@@ -771,15 +835,15 @@ namespace klang {
 		Values values;
 	};
 
-	template<typename... Settings>
-	static Program Preset(const char* name, const Settings... settings)
-	{	Values values;
-		float preset[] = { (float)settings... };
-		int nbSettings = sizeof...(settings);
-		for(int s=0; s<nbSettings; s++)
-			values.add(preset[s]);
-		return { Caption::from(name), values };
-	}
+	//template<typename... Settings>
+	//static Program Preset(const char* name, const Settings... settings)
+	//{	Values values;
+	//	float preset[] = { (float)settings... };
+	//	int nbSettings = sizeof...(settings);
+	//	for(int s=0; s<nbSettings; s++)
+	//		values.add(preset[s]);
+	//	return { Caption::from(name), values };
+	//}
 
 	struct Presets : Array<Program, 128> { 
 		void operator += (const Program& preset) {
@@ -1258,6 +1322,18 @@ namespace klang {
 					}
 				}
 			}
+
+			bool operator==(const Series& in) const {
+				if (count != in.count) return false;
+				for (unsigned int i = 0; i < count; i++)
+					if (items[i].x != in.items[i].x || items[i].y != in.items[i].y)
+						return false;
+				return true;
+			}
+
+			bool operator!=(const Series& in) const {
+				return !operator==(in);
+			}
 		};
 
 		struct Axis {
@@ -1445,11 +1521,11 @@ namespace klang {
 			virtual void input(const SIGNAL& source) { in = source; }
 		};
 
-		template<typename SIGNAL>
-		inline Input<SIGNAL>& operator>>(SIGNAL& source, Input<SIGNAL>& input) {
-			input << source;
-			return input;
-		}
+		//template<typename SIGNAL>
+		//inline Input<SIGNAL>& operator>>(SIGNAL& source, Input<SIGNAL>& input) {
+		//	input << source;
+		//	return input;
+		//}
 
 		template<typename SIGNAL>
 		struct Output {
@@ -1547,6 +1623,18 @@ namespace klang {
 		};
 
 		template<typename SIGNAL>
+		inline Modifier<SIGNAL>& operator>>(SIGNAL& input, Modifier<SIGNAL>& modifier) {
+			modifier << input;
+			return modifier;
+		}
+
+		template<typename SIGNAL>
+		inline Modifier<SIGNAL>& operator>>(const SIGNAL& input, Modifier<SIGNAL>& modifier) {
+			modifier << input;
+			return modifier;
+		}
+
+		template<typename SIGNAL>
 		struct Oscillator : public Generator<SIGNAL> {
 		protected:
 			Phase increment;				// phase increment (per sample, in seconds or samples)
@@ -1601,6 +1689,12 @@ namespace klang {
 		return modifier;
 	}
 
+	template<typename TYPE>
+	inline Modifier& operator>>(const TYPE& input, Modifier& modifier) {
+		modifier << input;
+		return modifier;
+	}
+
 	inline Modifier& operator>>(float input, Modifier& modifier) {
 		modifier << input;
 		return modifier;
@@ -1642,6 +1736,7 @@ namespace klang {
 
 	inline static Function<float> sqrt(::sqrtf);
 	inline static Function<float> sqr([](float x) -> float { return x * x; });
+	inline static Function<float> cube([](float x) -> float { return x * x * x; });
 	inline static Function<float> abs(::fabsf);
 
 	#define sqrt klang::sqrt // avoid conflict with std::sqrt
@@ -1707,8 +1802,11 @@ namespace klang {
 		}
 
 		virtual void set(param delay) override {
-			assert(delay <= SIZE);
-			Delay::time = delay;
+			Delay::time = delay <= SIZE ? (int)delay : SIZE;
+		}
+
+		signal operator()(signal delay) {
+			return tap(delay);
 		}
 	};
 
@@ -2269,7 +2367,6 @@ namespace klang {
 
 		Controls controls;
 		Presets presets;
-		//Frequency fs;
 	};
 
 	struct Effect : public Plugin, public Modifier {

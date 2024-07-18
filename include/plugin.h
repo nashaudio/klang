@@ -250,6 +250,7 @@ namespace DSP
         Options options;        // text options for menus and group buttons
 
         float value;            // current control value;
+        float smoothed;         // smoothed control value;
     };
 
 	const Parameter::Size Automatic = { -1, -1, -1, -1 };
