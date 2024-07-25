@@ -411,8 +411,6 @@ namespace klang {
 		increment(float amount, double size) : amount(amount), size((float)size) { }
 
 		increment& operator=(float in) { amount = in; return *this;  }
-
-		//operator float() const { return amount; }
 	};
 
 	struct Control;
