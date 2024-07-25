@@ -15,7 +15,7 @@ extern "C" {
 
 #define CATCH_ALL(err)                              \
     catch (...) {                                   \
-        throw err;                                 \
+        throw;                                      \
     }
 
 PTR_FUNCTION synthCreate(float sampleRate) {                                                                            
@@ -23,11 +23,15 @@ PTR_FUNCTION synthCreate(float sampleRate) {
     ::stk::Stk::setSampleRate(sampleRate);                                                                              
     try { 
         return (DSP::Synth*)new KSynth(new PLUGIN_NAME());
-    } CATCH_ALL(nullptr)
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 VOID_FUNCTION synthDestroy(void* synth) {                                                                               
-    delete (DSP::Synth*)synth;
+    try {
+        delete (DSP::Synth*)synth;
+    } catch (...) { }
 }                                                                                                                       
                                                                                                                             
 VOID_FUNCTION getBackground(void** data, int* size) {                                                                   

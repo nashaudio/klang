@@ -97,7 +97,7 @@ struct THX : Stereo::Synth {
 		void partials(mono::buffer buffer){
 			for(int p=0; p<HARMONICS; p++){
 				buffer.rewind();
-				while(buffer){
+				while(!buffer.finished()){
 					if constexpr (PARTIALS >= 3)
 						buffer += (partial[p][0] + partial[p][1] + partial[p][1]) * 0.25f;
 					else
@@ -111,7 +111,7 @@ struct THX : Stereo::Synth {
 		void partials(stereo::buffer buffer){
 			for(int p=0; p<HARMONICS; p++){
 				buffer.rewind();
-				while(buffer){
+				while(!buffer.finished()){
 					buffer.channel(partial[p][0].right) += partial[p][0] * 0.25f;
 					if constexpr (PARTIALS >= 2)
 						buffer.channel(partial[p][1].right) += partial[p][1] * 0.25f;
@@ -175,7 +175,7 @@ struct THX : Stereo::Synth {
 			}
 			
 			buffer.rewind();
-			while(buffer)
+			while(!buffer.finished())
 				buffer++ *= adsr++;			
 			if (adsr.finished())
 				stop();
@@ -194,7 +194,7 @@ struct THX : Stereo::Synth {
 			Toggle("Hyperdrive"),
 		};
 			
-		controls(2).size = { 50, 150, 300, 10 };
+		controls[2].size = { 50, 150, 300, 10 };
 
 		notes.add<MyNote>(32);
 	}

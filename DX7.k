@@ -137,7 +137,7 @@ struct {
 			206, 209, 211, 214, 216, 218, 220, 222, 224, 225, 227, 229, 230, 232, 233, 235, 
 			237, 238, 240, 241, 242, 243, 244, 246, 246, 248, 249, 250, 251, 252, 253, 254
 		};
-		int clamped_vel = max(0, min(127, velocity));
+		int clamped_vel = std::clamp(velocity, 0, 127);
 		int vel_value = velocity_data[clamped_vel >> 1] - 239;
 		int scaled_vel = ((sensitivity * vel_value + 7) >> 3) << 4;
 		return scaled_vel;
@@ -335,12 +335,14 @@ struct DX7 : Synth {
 		}
 	};
 	
+	
+	
 	// Initialise plugin (called once at startup)
 	DX7() {		
 		controls = { 
 			Menu("Preset", "TUB BELLS", "E.PIANO 1", "E.ORGAN 1", "HARPSICH 1", "STRINGS 1" )
 		};
-		controls(0).size = { 50,50,100,25 };
+		controls[0].size = { 50,50,100,25 };
 
 		notes.add<MyNote>(32);
 	}

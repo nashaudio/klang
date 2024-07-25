@@ -13,9 +13,13 @@
 
 extern "C" {                                                                                                                
     PTR_FUNCTION effectCreate(float sampleRate) {                                                                           
-        klang::fs = sampleRate;                                                                                             
-        ::stk::Stk::setSampleRate(sampleRate);                                                                              
-        return (DSP::Effect*)new KEffect(new PLUGIN_NAME());
+        try {
+            klang::fs = sampleRate;
+            ::stk::Stk::setSampleRate(sampleRate);
+            return (DSP::Effect*)new KEffect(new PLUGIN_NAME());
+        } catch(...) {
+			return nullptr;
+		}
     }
                                                                                                                             
     VOID_FUNCTION getBackground(void** data, int* size) {                                                                   
@@ -29,12 +33,12 @@ extern "C" {
             if (graph) ((DSP::Effect*)effect)->getDebugGraph(graph);
             if (console) ((DSP::Effect*)effect)->getDebugConsole(console);
             return 0;
-        }
-        catch (...) { return 1; }
+        } catch (...) { return 1; }
     }
                                                                                                                             
     VOID_FUNCTION effectDestroy(void* effect) {                                                                             
-        delete (DSP::Effect*)effect;
+        try { delete (DSP::Effect*)effect; }
+		catch(...) { }
     }                                                                                                                       
                                                                                                                             
     INT_FUNCTION effectProcess(void* effect, const float** inputBuffers, float** outputBuffers, int numSamples) {           

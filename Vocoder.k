@@ -72,7 +72,7 @@ struct Vocoder : Effect {
 
 		for(int b=0; b<BANDS; b++){
 			saw[b].set(frequency);
-			follower[b] = Envelope::Follower::RMS;
+			follower[b] = RMS;
 			follower[b].set(controls[2], controls[3]);
 		}
 	}

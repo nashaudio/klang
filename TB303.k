@@ -56,7 +56,7 @@ struct TB303 : Synth {
 
 		static inline float shape(float x) {
 			constexpr float r_6 = 1.f/6.f;
-			return (x > root2) ? root2 : (x < -0.5) ? -0.5f : x;
+			return (x > root2) ? root2.f : (x < -0.5) ? -0.5f : x;
 		}
 	
 		static inline float hardclip(float x) {

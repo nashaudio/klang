@@ -5,73 +5,71 @@ using namespace klang::optimised;
 struct Compressor : Effect {
 	Envelope::Follower follower;
 
-	// Initialise plugin (called once at startup)
 	Compressor() {
 		controls = { 
 			Meter("Input"),
 			Dial("Threshold", -96, 0, 0),
-			Dial("Ratio", 0.0, 100.0, 0.5),
-			Meter("Compression"),
-			Dial("Makeup Gain", -12, 12, 0),
+			Dial("Gate", -18, 0, 0),
+			Dial("Ratio", -32, 32.0, 0),
+			Meter("Compression", 0, 2, 1),
 			
 			Dial("Pre Gain", -12, 12, 0),
-			Dial("Attack", 0, 0.2, 0.5),
-			Dial("Release", 0, 1, 0.5),
-			Dial("Drive", -11, 11, 1),
+			Dial("Attack", 0, 1, 0.5),
+			Dial("Release", 0.1, 0.9, 0.5),
+			Dial("Makeup Gain", -12, 12, 0),
+			Dial("Drive", -11, 11, 0),
 		};
 		
-		compress.threshold_dB = controls[1];
-		compress.ratio = controls[2];
-		compress.compression = controls[3];
-		compress.makeup = controls[4];
+		presets = {
+			{ "Punchy Bass", { 0, -7.057, -0.493, -32.000, 0, 2.358, 0.234, 0.100, -0.340, 0.000 } },
+			{ "Dirty Break",   { 0, -11.239, 0.000, 32.000, 0, 0.000, 0.000, 0.663, 6.000, 2.105 } },
+			{ "Power Upgrade", { 0, -40.916, 0.000, 12.742, 0, 0.000, 0.000, 0.900, 12.000, -1.000 } },
+			{ "Industrial", { 0, -1.851, -1.506, 32.000, 0, 0.000, 0.000, 0.500, 6.034, -2.029 } },
+			{ "Funky Beat", { 0, -5.781, -5.000, 32.000, 0, 0.000, 0.000, 0.500, -12.000, -11.000 } },
+			{ "Tight Beat", { 0, -3.375, -0.377, 32.000, 0, 2.532, 0.035, 0.900, -12.000, -11.000 } },
+			{ "Deverb", { 0, -3.764, -13.989, -9.353, 0, 0.000, 0.095, 0.351, -5.142, -2.000 } },
+		};
+		
 	}
 
-	// Prepare for processing (called once per buffer)
 	void prepare() {
 		follower.set(sqr(controls[6]), sqr(controls[7]));
 		follower = Envelope::Follower::Peak;
+		
+		compress.threshold = dB(controls[1]) -> Amplitude;
+		compress.gate =         controls[2] == 0 ? 0.f 
+		                                         : float(dB(controls[1]+controls[2]) -> Amplitude);
+		compress.ratio =    abs(controls[3]) < 1 ? 1.f  
+		                      : controls[3]  < 0 ? 1.f + controls[3] / 31.5f
+		                                         : controls[3];	
+		compress.meter = 	    controls[4]; // map to meter
+		compress.makeup =    dB(controls[8]) -> Amplitude;			
 	}
 	
 	struct Dynamics : Modifier {
 		param level = 0.f;
+		param threshold, gate, ratio, makeup;
 		
-		ControlMap threshold_dB;
-		param threshold;
-		
-		ControlMap ratio;
-		ControlMap compression;
-		ControlMap makeup;
+		ControlMap meter;
 		
 		void set(param level){
 			Dynamics::level = level;
-			threshold = dB(Dynamics::threshold_dB) -> Amplitude;
 		}
 		
 		float gain(float level){	
 			if(level > threshold){
 				return 1 - (level - threshold) * (1.f - 1.f/ratio);
-			} if(level < threshold * 0.5) {
-				return std::max(0.f,(2.f * level) / threshold);
+			} if(gate && level < gate) {
+				return 10.f * (level - gate) + 1.f;
 			} else {
 				return 1;
 			}
 		}
 		
 		void process() {
-//			constant threshold = 0.4;
-//			constant ratio = 1.f/4.f;
-//		
-//			if(level > threshold){
-//				out = in * threshold + (level - threshold) / ratio;
-//			} else {
-//				out = in;
-//			}
-
-			const param c = gain(level);
-			c >> compression;
+			const param compression = gain(level) >> meter;		
 			
-			//const param makeup_gain = std::clamp(float(dB(-threshold_dB * (1.f - 1.f / ratio)) -> Amplitude), 0.f, 8.f) >> makeup;
-			in * c * (dB(makeup) -> Amplitude) >> out;
+			in * compression * makeup >> out;
 		}
 		
 	} compress;
@@ -95,21 +93,18 @@ struct Compressor : Effect {
 			return (1 + c) * x / (1 + c * x);
 		else
 			return (1 + c) * x / (1 - c * x);
-				
-		//return tanh(clip(x, threshold) * drive) / (0.1 * drive + tanh(drive));
 	}
 
 	// Apply processing (called once per sample)
 	void process() {
-		in >> follower >> controls[0];
+		in * dB(controls[5]) -> Amplitude >> in;
+	
+		(in >> debug) >> follower >> controls[0];
+		const signal gain = follower;	
 		
-		const signal gain = follower;
+		in >> compress(gain) >> out;	
 		
-		//Dynamics::gain >> graph(0,1,0,1);
-		
-		in >> debug;
-		(in * dB(controls[5]) -> Amplitude) >> compress(gain) >> out;
-		
-		out = softclip(out, controls[8], sqrt(follower.out));
+		if(controls[9])
+			out = softclip(out, controls[9], sqrt(gain));
 	}
 };

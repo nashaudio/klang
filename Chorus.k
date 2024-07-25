@@ -16,18 +16,19 @@ struct Chorus : Stereo::Effect {
 		};
 		
 		presets = {
-			{ "Warm", { 1.000, 0.1, 0.250, 5.691, 0.500, 1.500 } },
+			{ "Warm", { 1.000, 0.1, 0.500, 5.500, 0.500, 1.500 } },
 		};
 		
-		left.rnd_f = random(0.99, 1.01);
-		left.rnd_ad = random(0.99, 1.01);
-		left.rnd_ao = random(0.99, 1.01);
-		
-		right.rnd_f = random(0.99, 1.01);
-		right.rnd_ad = random(0.99, 1.01);
-		right.rnd_ao = random(0.99, 1.01);
+		// minor variations for stereo effect
+		left.rnd_f =  0.990025043f; //random(0.99, 1.01);
+		left.rnd_ad = 1.001271720f; //random(0.99, 1.01);
+		left.rnd_ao = 0.993866086f; //random(0.99, 1.01);
+		right.rnd_f =  1.00617480f; //random(0.99, 1.01);
+		right.rnd_ad = 1.00170016f; //random(0.99, 1.01);
+		right.rnd_ao = .999597489f; //random(0.99, 1.01);
 	}
 
+	// simple LFO (0.0-1.0)
 	struct Modulator : Oscillator {
 		Triangle osc;
 		param depth, offset;
@@ -50,43 +51,42 @@ struct Chorus : Stereo::Effect {
 		Delay<192000> delay;
 		Modulator mod[5];
 		
-		param rnd_f;
-		param rnd_ad;
-		param rnd_ao;
+		param rnd_f, rnd_ad, rnd_ao;
 		
-		// Apply processing (called once per sample)
-		void process() {
-			const param f = rnd_f * controls[1];
-			const param f_d = controls[2];
-			const param ad = rnd_ad * controls[3].smooth();
+		void prepare() {
+			const param f =    controls[1] * rnd_f; 
+			const param f_d =  controls[2];
+			const param ad =   controls[3] * rnd_ad;
 			const param ad_d = controls[4];
-			const param ao = rnd_ao * controls[5].smooth();
-
-			delay.set(0);
+			const param ao =   controls[5] * rnd_ao;
+			const float ms = fs / 1000.f;
 			
-			mod[0].set(f - f * 2 * f_d, (ad - ad * 2.f * ad_d) * fs / 1000.f, (ao - 2.f * ao * 0.5f) * fs / 1000.f);
-			mod[1].set(f - f * f_d,     (ad - ad * ad_d)       * fs / 1000.f, (ao - ao * 0.5f)       * fs / 1000.f);
-			mod[2].set(f, 			     ad                    * fs / 1000.f,  ao                    * fs / 1000.f);
-			mod[3].set(f + f * f_d,     (ad + ad * ad_d)       * fs / 1000.f, (ao + ao * 0.5f)       * fs / 1000.f);
-			mod[4].set(f + f * 2 * f_d, (ad + ad * 2.f * ad_d) * fs / 1000.f, (ao + 2.f * ao * 0.5f) * fs / 1000.f);
-	
+			mod[0].set(f - f * f_d * 2.f, (ad - ad * ad_d * 2.f) * ms, (ao - ao * 1.0f) * ms);
+			mod[1].set(f - f * f_d,       (ad - ad * ad_d)       * ms, (ao - ao * 0.5f) * ms);
+			mod[2].set(f, 			       ad                    * ms,  ao              * ms);
+			mod[3].set(f + f * f_d,       (ad + ad * ad_d)       * ms, (ao + ao * 0.5f) * ms);
+			mod[4].set(f + f * f_d * 2.f, (ad + ad * ad_d * 2.f) * ms, (ao + ao * 1.0f) * ms);	
+		}
+		
+		void process() {
 			const param gain = controls[0];
 			
-			in >> delay;	
-			in + gain * delay(mod[0]) 
-			   + gain * delay(mod[1]) 
-			   + gain * delay(mod[2]) 
-			   + gain * delay(mod[3]) 
-			   + gain * delay(mod[4]) >> out;
+			in >> delay;			
+			
+			in + gain * ( delay(mod[0]) 
+			            + delay(mod[1]) 
+			            + delay(mod[2]) 
+			            + delay(mod[3]) 
+			            + delay(mod[4]) ) >> out;
 		}
 	};
 	
 	Channel left, right;
 	
-//	void prepare(){
-//		left.prepare();
-//		right.prepare();
-//	}
+	void prepare(){
+		left.prepare();
+		right.prepare();
+	}
 	
 	void process(){
 		in.l >> left >> out.l;

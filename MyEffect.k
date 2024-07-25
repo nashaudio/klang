@@ -10,8 +10,8 @@ struct MyEffect : Effect {
 
 	// Initialise plugin (called once at startup)
 	MyEffect() {
-		peak = Envelope::Follower::Peak;
-		mean = Envelope::Follower::Mean;
+		peak = Peak;
+		mean = Mean;
 	
 		controls = { 
 			Dial("Gain", 0.0, 1.0, 0.5),
