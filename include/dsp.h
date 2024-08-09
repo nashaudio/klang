@@ -21,6 +21,8 @@
 #define M_2PI 6.28318530717958647692528676655901f
 #endif
 
+#include "plugin.h"
+
 //==============================================================================
 // DSP OBJECTS - These STK objects have been adapted to support development.
 // The original STK objects they are based on are identified by the stk:: label
@@ -30,6 +32,8 @@
 //==============================================================================
 
 namespace DSP {
+    using namespace MiniPlugin;
+
     static float getSampleRate() { return ::stk::Stk::sampleRate(); }
     
     typedef stk::Generator Oscillator;
@@ -364,7 +368,7 @@ namespace DSP {
     typedef float (*Function)(float x);
     typedef float (*FunctionA)(float x, float a);
     typedef float (*FunctionAB)(float x, float a, float b);
-    typedef float (*FunctionP)(float x, Note* ptr);
+    //typedef float (*FunctionP)(float x, DSP::Note* ptr);
     
     class Wavetable : public stk::FileLoop
     {
@@ -499,11 +503,11 @@ namespace DSP {
             END_DISTORT
         }
         
-        void distort(FunctionP function, Note* note){
+        /*void distort(FunctionP function, Note* note){
             BEGIN_DISTORT
                 float sample = (function)(*pSample, note);
             END_DISTORT
-        }
+        }*/
         
         void setOffset(float samples){
             time_ = samples;
@@ -557,11 +561,11 @@ namespace DSP {
             END_GENERATE
         }
         
-        void generate(FunctionP function, Note* note){
-            BEGIN_GENERATE
-                float sample = (function)(phase, note);
-            END_GENERATE
-        }
+        //void generate(FunctionP function, Note* note){
+        //    BEGIN_GENERATE
+        //        float sample = (function)(phase, note);
+        //    END_GENERATE
+        //}
         
     private:
         float fBaseFrequency;
@@ -579,30 +583,28 @@ namespace DSP {
         }
     };
 
-    inline const Wavetable* const Synth::getWavetable(int index) const {
-        return wavetables ? &wavetables[index] : nullptr;
-    }
-
-    inline void Synth::loadWavetables(const char* path)
-    {
-        if(!path || wavetables)
-            return;
-        wavetables = new Wavetable[16];
-        char wav_path[1024] = { 0 };
-        for(int w=0; w<16; w++){
-            snprintf(wav_path, 1024, "%sSound%02d.wav", path, w);
-            wavetables[w].openFile(wav_path);
-            wavetables[w].detachFile();
-        }
-    }
-
-    inline void Synth::unloadWavetables()
-    {
-        if(!wavetables) return;
-        delete[] wavetables;
-        wavetables = nullptr;
-    }
-    
 } // namespace DSP
 
+inline const DSP::Wavetable* const MiniPlugin::Synth::getWavetable(int index) const {
+    return wavetables ? &wavetables[index] : nullptr;
+}
 
+inline void MiniPlugin::Synth::loadWavetables(const char* path)
+{
+    if (!path || wavetables)
+        return;
+    wavetables = new DSP::Wavetable[16];
+    char wav_path[1024] = { 0 };
+    for (int w = 0; w < 16; w++) {
+        snprintf(wav_path, 1024, "%sSound%02d.wav", path, w);
+        wavetables[w].openFile(wav_path);
+        wavetables[w].detachFile();
+    }
+}
+
+inline void MiniPlugin::Synth::unloadWavetables()
+{
+    if (!wavetables) return;
+    delete[] wavetables;
+    wavetables = nullptr;
+}

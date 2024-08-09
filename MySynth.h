@@ -11,7 +11,7 @@
 #include "include/dsp.h"
 using namespace DSP;
 
-#include "Extra.h"
+//#include "Extra.h"
 
 struct MyThing
 {
@@ -22,7 +22,7 @@ struct MyThing
 // MySynth - object representing the whole synthesiser (containing multiple note objects - see below)
 //===================================================================================================
 
-class MySynth : public DSP::Synth
+class MySynth : public MiniPlugin::Synth
 {
 public:
     // constructor (initialise variables, etc.)

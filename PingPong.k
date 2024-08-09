@@ -43,7 +43,7 @@ struct PingPong : Stereo::Effect {
 	void process() {
 		const param rate = sqr(controls[3]) * 100.f;
 		const param new_delay = controls[5].smooth();
-		if(abs(delay - new_delay) > 0.0001f){
+		if(std::abs(delay - new_delay) > 0.0001f){
 			delay = new_delay;
 			controls[1].set(new_delay);	
 			lfo.set(rate, pi);

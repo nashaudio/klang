@@ -1,6 +1,6 @@
 //
-//  MyEffect.h
-//  MyEffect Plugin Header File
+//  CppEffect.h
+//  CppEffect Plugin Header File
 //
 //  Used to declare objects and data structures used by the plugin.
 //
@@ -13,11 +13,11 @@ using namespace DSP;
 
 //#include "Extra.h"
 
-class MyEffect : public MiniPlugin::Effect
+class CppEffect : public MiniPlugin::Effect
 {
 public:
-    MyEffect();     // constructor (initialise variables, etc.)
-    ~MyEffect();    // destructor (clean up, free memory, etc.)
+    CppEffect();     // constructor (initialise variables, etc.)
+    ~CppEffect();    // destructor (clean up, free memory, etc.)
 
     void setSampleRate(float sampleRate){ stk::Stk::setSampleRate(sampleRate); }
     float getSampleRate() const { return stk::Stk::sampleRate(); };
@@ -30,6 +30,4 @@ public:
 
 private:
     // Declare shared member variables here
-    Noise noise;
-	Sine lfo;
 };

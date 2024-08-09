@@ -5,7 +5,7 @@
 //  Used to define the bodies of functions used by the plugin, as declared in SynthPlugin.h.
 //
 
-#include "MyNote.h"
+#include "MySynthNote.h"
 
 //================================================================================
 // MyNote - object representing a single note (within the synthesiser - see above)

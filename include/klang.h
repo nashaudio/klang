@@ -185,6 +185,7 @@ namespace klang {
 		TYPE items[CAPACITY];
 		unsigned int count = 0;
 
+		static int capacity() { return CAPACITY; }
 		unsigned int size() const { return count; }
 
 		void add(const TYPE& item) {
@@ -825,10 +826,15 @@ namespace klang {
 		Control& operator-=(float x) { value -= x; return *this; }
 		Control& operator/=(float x) { value /= x; return *this; }
 
-		template<typename TYPE> TYPE operator+(TYPE x) { return value + x; }
-		template<typename TYPE> TYPE operator*(TYPE x) { return value * x; }
-		template<typename TYPE> TYPE operator-(TYPE x) { return value - x; }
-		template<typename TYPE> TYPE operator/(TYPE x) { return value / x; }
+		template<typename TYPE> signal operator+(const Control& x) const { return value + x; }
+		template<typename TYPE> signal operator*(const Control& x) const { return value * x; }
+		template<typename TYPE> signal operator-(const Control& x) const { return value - x; }
+		template<typename TYPE> signal operator/(const Control& x) const { return value / x; }
+
+		template<typename TYPE> TYPE operator+(TYPE x) const { return value + x; }
+		template<typename TYPE> TYPE operator*(TYPE x) const { return value * x; }
+		template<typename TYPE> TYPE operator-(TYPE x) const { return value - x; }
+		template<typename TYPE> TYPE operator/(TYPE x) const { return value / x; }
 
 		template<typename TYPE> Control& operator<<(TYPE& in) { value = in; return *this;  }		// assign to control with processing
 		template<typename TYPE> Control& operator<<(const TYPE& in) { value = in; return *this;  }	// assign to control without/after processing
@@ -849,8 +855,12 @@ namespace klang {
 		operator Control&() { return *control; }
 		operator signal& () { return control->value; }
 		operator const signal&() const { return control->value; }
+		operator param() const { return control->value; }
 		operator float() const { return control->value; }
 		signal smooth() { return control->smooth(); }
+
+		template<typename TYPE> Control& operator<<(TYPE& in) { control->value = in; return *control; }		// assign to control with processing
+		template<typename TYPE> Control& operator<<(const TYPE& in) { control->value = in; return *control; }	// assign to control without/after processing
 	};
 
 	IS_SIMPLE_TYPE(Control);
@@ -936,7 +946,7 @@ namespace klang {
 
 	typedef Array<float, 128> Values;
 
-	struct Program {
+	struct Preset {
 		Caption name = { 0 };
 		Values values;
 	};
@@ -951,8 +961,8 @@ namespace klang {
 	//	return { Caption::from(name), values };
 	//}
 
-	struct Presets : Array<Program, 128> { 
-		void operator += (const Program& preset) {
+	struct Presets : Array<Preset, 128> {
+		void operator += (const Preset& preset) {
 			items[count++] = preset;
 		}
 
@@ -961,7 +971,7 @@ namespace klang {
 				operator+=(presets[p]);
 		}
 
-		void operator=(std::initializer_list<Program> presets) {
+		void operator=(std::initializer_list<Preset> presets) {
 			for(auto preset : presets)
 				operator+=(preset);
 		}
@@ -1121,539 +1131,6 @@ namespace klang {
 
 		const float* data() const { return samples; }
 	};
-
-	struct Console : public Text<16384> {
-		static std::mutex _lock;
-		thread_local static Text<16384> last;
-		int length = 0;
-
-		void clear() {
-			length = 0;
-			string[0] = 0;
-		}
-
-		Console& operator=(const char* in) {
-			std::lock_guard<std::mutex> lock(_lock);
-			length = std::min(capacity(), (int)strlen(in));
-			memcpy(string, in, length);
-			string[length] = 0;
-			return *this;
-		}
-
-		Console& operator=(const Console& in) {
-			std::lock_guard<std::mutex> lock(_lock);
-			length = std::min(capacity(), in.length);
-			memcpy(string, in.string, length);
-			string[length] = 0;
-			return *this;
-		}
-
-		Console& operator+=(const char* in) {
-			std::lock_guard<std::mutex> lock(_lock);
-			const int len = std::max(0, std::min(capacity() - length, (int)strlen(in)));
-			memcpy(&string[length], in, len);
-			length += len;
-			string[length] = 0;
-			memcpy(&last, in, len);
-			last.string[len] = 0;
-			return *this;
-		}
-
-		bool hasText() const {
-			return length != 0;
-		}
-
-		int getText(char* buffer) {
-			//if (!length) return 0;
-			std::lock_guard<std::mutex> lock(_lock);
-			const int _length = length;
-			memcpy(buffer, string, length);
-			buffer[length] = 0; // null terminator
-			clear();
-			return _length;
-		}
-	};
-
-	inline thread_local Text<16384> Console::last;
-
-#define PROFILE(func, ...) debug.print("%-16s = %fns\n", #func "(" #__VA_ARGS__ ")", debug.profile(1000, func, __VA_ARGS__));
-
-	struct Debug {
-
-		struct Buffer : private buffer {
-			using buffer::clear;
-			using buffer::rewind;
-			using buffer::operator++;
-			using buffer::operator signal&;
-			
-			Buffer() : buffer(16384) { }
-
-			enum Content {
-				Empty = 0,
-				Notes = 1,
-				Effect = 2,
-				Synth = 3,
-			} content = Empty;
-
-			/*		void attach(float* buffer, int size) {
-						Debug::buffer = new klang::buffer(buffer, size);
-					}
-
-					void detach() {
-						klang::buffer* tmp = buffer;
-						buffer = nullptr;
-						delete tmp;
-					}*/
-
-			bool active = false;
-			int used = 0;
-
-			const float* get() {
-				if (active) {
-					active = false;
-					return data();
-				} else {
-					return nullptr;
-				}
-			}
-
-			Buffer& operator+=(const signal in) {
-				active = true;
-				buffer::operator+=(in);
-				return *this;
-			}
-
-			template<typename TYPE>
-			Buffer& operator+=(TYPE& in) {
-				active = true;
-				buffer::operator+=(in);
-				return *this;
-			}
-
-			signal& operator>>(signal& destination) const {
-				destination << *ptr;
-				return destination;
-			}
-
-			operator const signal&() const {
-				return *ptr;
-			}
-		};
-		
-		thread_local static Buffer buffer; // support multiple threads/instances
-
-		Console console;
-
-		template <typename Func, typename... Args>
-		inline static double profile(Func func, Args... args) {
-			using namespace std::chrono;
-
-			auto start = high_resolution_clock::now();
-			func(args...);
-			auto end = high_resolution_clock::now();
-
-			auto duration = duration_cast<nanoseconds>(end - start).count();
-			return (double)duration;
-		}
-
-		template <typename Func, typename... Args>
-		inline static double profile(int times, Func func, Args... args) {
-			double sum = 0;
-			while (times--) {
-				sum += profile(func, args...);
-			}
-			return sum / 1000000.0;
-		}
-
-		struct Session {
-			Session(float*, int size, Buffer::Content content) {
-				//if (buffer) {
-					//debug.attach(buffer, size);
-					if (buffer.content != Buffer::Notes)
-						buffer.clear(size);
-					buffer.content = content;
-					buffer.rewind();
-				//}
-			}
-			~Session() {
-				//debug.detach();
-			}
-
-			bool hasAudio() const {
-				return buffer.active;
-			}
-			const float* getAudio() const {
-				return buffer.get();
-			}
-		};
-
-		void print(const char* format, ...) {
-			if (console.length < 10000) {
-				thread_local static char string[1024] = { 0 };
-				string[0] = 0;
-				va_list args;                     // Initialize the variadic argument list
-				va_start(args, format);           // Start variadic argument processing
-				vsnprintf(string, 1024, format, args);  // Safely format the string into the buffer
-				va_end(args);                     // Clean up the variadic argument list
-				console += string;
-			}
-		}
-
-		void printOnce(const char* format, ...) {
-			if(console.length < 1024) {
-				thread_local static char string[1024] = { 0 };
-				string[0] = 0;
-				va_list args;                     // Initialize the variadic argument list
-				va_start(args, format);           // Start variadic argument processing
-				vsnprintf(string, 1024, format, args);  // Safely format the string into the buffer
-				va_end(args);                     // Clean up the variadic argument list
-
-				if (console.last != string)
-					console += string;
-			}
-		}
-
-		bool hasText() const {
-			return console.hasText();
-		}
-
-		int getText(char* buffer) {
-			return console.getText(buffer);
-		}
-
-		operator const signal&() const {
-			return buffer.operator const klang::signal&();
-		}
-	};
-
-	inline static Debug::Buffer& operator>>(const signal source, Debug& debug) {
-		return debug.buffer += source;
-	}
-
-	template<typename TYPE>
-	inline static Debug::Buffer& operator>>(TYPE& source, Debug& debug) {
-		return debug.buffer += source;
-	}
-	
-	static Debug debug;
-	inline thread_local Debug::Buffer Debug::buffer; //
-	inline std::mutex Console::_lock;
-
-	//template<typename TYPE>
-	//struct FunctionType {
-	//	using Type = TYPE;
-	//	using Pointer = TYPE(*)(TYPE);
-
-	//	FunctionType(Pointer f) : function(f) { }
-	//	Pointer function;
-	//};
-
-	//template<typename T>
-	//static FunctionType<T> Function(T(*func)(T)) {
-	//	return FunctionType<T>(func);
-	//}
-
-#ifndef GRAPH_SIZE
-#define GRAPH_SIZE 44100
-#endif
-
-	#define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
-
-	template <typename TYPE>
-	struct Result {
-		TYPE* y = nullptr;
-		int i = 0;
-		TYPE sum = 0;
-
-		Result(TYPE* array, int index) : y(&array[index]), i(index) { }
-
-		TYPE& operator[](int index) {
-			return *(y + index);
-		}
-
-		operator TYPE const () { return *y; }
-
-		Result& operator=(const TYPE& in) {
-			*y = in;
-			return *this;
-		}
-
-		TYPE& operator++(int) { i++; return *++y; }
-	};
-
-	template<typename TYPE, int SIZE>
-	struct Table : public Array<TYPE, SIZE> {
-		typedef Array<TYPE, SIZE> Array;
-		typedef Result<TYPE> Result;
-
-		using Array::add;
-
-		// single argument
-		Table(TYPE(*function)(TYPE)) {
-			for (int x = 0; x < SIZE; x++)
-				add(function(x));
-		}
-
-		// double argument
-		Table(void(*function)(TYPE, TYPE), TYPE arg) {
-			Array::count = SIZE;
-			for (int x = 0; x < SIZE; x++)
-				Array::items[x] = function(x, arg);
-		}
-
-		// single argument (enhanced)
-		Table(void(*function)(TYPE x, Result& y)) {
-			Array::count = SIZE;
-			Result y(Array::items, 0);
-			for (int x = 0; x < SIZE; x++) {
-				function((TYPE)x, y);
-				y.sum += Array::items[x];
-				y++;
-			}
-		}
-
-		Table(std::initializer_list<TYPE> values) {
-			for (TYPE value : values)
-				add(value);
-		}
-
-		using Array::operator[];
-		TYPE operator[](float index) {
-			if (index < 0) return Array::items[0];
-			else if (index >= (SIZE-1)) return Array::items[SIZE - 1];
-			else {
-				const float x = std::floor(index);
-				const int i = int(x);
-				const float dx = index - x;
-				const float dy = Array::items[i + 1] - Array::items[i];
-				return Array::items[i] + dx * dy;
-			}
-		}
-	};
-
-	struct Graph {
-		struct Point { 
-			double x, y; 
-			bool valid() const { return !isnan(x) && !isinf(x) && !isnan(y); } // NB: y can be +/- inf
-		};
-
-		struct Axis;
-
-		struct Series : public Array<Point, GRAPH_SIZE+1> {
-			void* function = nullptr;
-			using Array::add;
-			void add(double y) {
-				add({ (double)Array::size(), y });
-			}
-
-			template<class TYPE>
-			void plot(TYPE f, const Axis& x_axis) {
-				if (function != (void*)f) {
-					clear();
-					function = (void*)f;
-					double x = 0;
-					const double dx = x_axis.range() / GRAPH_SIZE;
-					for (int i = 0; i <= GRAPH_SIZE; i++) {
-						x = x_axis.min + i * dx;
-						add({ x, (double)f(x) });
-					}
-				}
-			}
-
-			bool operator==(const Series& in) const {
-				if (count != in.count) return false;
-				for (unsigned int i = 0; i < count; i++)
-					if (items[i].x != in.items[i].x || items[i].y != in.items[i].y)
-						return false;
-				return true;
-			}
-
-			bool operator!=(const Series& in) const {
-				return !operator==(in);
-			}
-		};
-
-		struct Axis {
-			double min = 0, max = 0;
-			bool valid() const { return max != min; }
-			double range() const { return max - min; }
-			bool contains(double value) const { return value >= min && value <= max; }
-			void clear() { min = max = 0; }
-
-			void from(const Series& series, double Point::*axis) {
-				if (!series.count) return;
-				int points = 0;
-				for (unsigned int p = 0; p < series.count; p++) {
-					const Point& pt = series[p];
-					if (pt.valid() && !isinf(pt.*axis)) {
-						if (!points || pt.*axis < min) min = pt.*axis;
-						if (!points || pt.*axis > max) max = pt.*axis;
-						points++;
-					}
-				}
-				if (abs(max) < 0.0000000001) max = 0;
-				if (abs(min) < 0.0000000001) min = 0;
-				if (abs(max) > 1000000000.0) max = 0;
-				if (abs(min) > 1000000000.0) min = 0;
-				if (min > max) max = min = 0;
-			}
-		};
-
-		struct Axes {
-			Axis x,y;
-			bool valid() const { return x.valid() && y.valid(); }
-			void clear() { x = { 0,0 }; y = { 0,0 }; }
-			bool contains(const Point& pt) const { return x.contains(pt.x) && y.contains(pt.y); }
-		};
-
-		void clear() {
-			dirty = true;
-			axes.clear();
-			for (int s = 0; s < 16; s++)
-				data[s].clear();
-			data.clear();
-		}
-
-		bool isActive() const {
-			if (data.count)
-				return true;
-			for (int s = 0; s < 16; s++)
-				if (data[s].count)
-					return true;
-			return false;
-		}
-
-		struct Data : public Array<Series, 16> {
-			Series* find(void* function) {
-				for (int s = 0; s < 16; s++)
-					if (operator[](s).function == function)
-						return &items[s];
-				return nullptr;
-			}
-		};
-
-		Graph& operator()(double min, double max) {
-			dirty = true;
-			axes.x.min = min; axes.x.max = max;
-			return *this;
-		}
-
-		Graph::Series& operator[](int index) {
-			dirty = true;
-			return data[index];
-		}
-
-		const Graph::Series& operator[](int index) const {
-			return data[index];
-		}
-
-		Graph& operator()(double x_min, double x_max, double y_min, double y_max) {
-			dirty = true;
-			axes.x.min = x_min; axes.x.max = x_max;
-			axes.y.min = y_min; axes.y.max = y_max;
-			return *this;
-		}
-
-		operator Series& () {
-			dirty = true;
-			return data[0];
-		}
-
-		template<class TYPE>
-		void plot(TYPE function) {
-			Graph::Series* series = Graph::data.find((void*)function);
-			if(!series)
-				series = Graph::data.add();
-			if (series) {
-				dirty = true;
-				if (!axes.x.valid())
-					axes.x = { -1, 1 };
-				series->plot(function, axes.x);
-			}
-		}
-
-		template<typename TYPE>
-		void add(TYPE y) {			data[0].add(y); }
-		void add(const Point pt) {	data[0].add(pt); }
-
-		template<typename TYPE>
-		Graph& operator+=(TYPE y) {			data[0].add(y); return *this;  }
-		Graph& operator+=(const Point pt) { data[0].add(pt); return *this; }
-
-		template<typename TYPE>
-		Graph& operator=(TYPE(*function)(TYPE)) {
-			plot(function);
-			return *this;
-		}
-
-		Graph& operator=(std::initializer_list<Point> values) {
-			clear(); return operator+=(values);
-		}
-
-		Graph& operator+=(std::initializer_list<Point> values) {
-			for (const auto& value : values)
-				add(value);
-			return *this;
-		}
-
-		// returns the user-defined axes
-		const Axes& getAxes() const { return axes; }
-
-		// calculates axes based on data
-		void getAxes(Axes& axes) const { 
-			if (!axes.x.valid()) {
-				axes.x.clear();
-				for (int s = 0; s < 16; s++)
-					axes.x.from(data[s], &Point::x);
-				if (!axes.y.valid() && axes.y.max != 0)
-					axes.y.min = 0;
-			}
-			if (!axes.y.valid()) {
-				axes.y.clear();
-				for (int s = 0; s < 16; s++)
-					axes.y.from(data[s], &Point::y);
-				if (!axes.y.valid() && axes.y.max != 0)
-					axes.y.min = 0;
-			}
-		}
-		
-		const Data& getData() const { return data; }
-		bool isDirty() const { return dirty; }
-		void setDirty(bool dirty) { Graph::dirty = dirty; }
-
-		void truncate(unsigned int count) {
-			if(count < data.count)
-				data.count = count;
-
-			for(int s=0; s<16; s++)
-				if (count < data[s].count)
-					data[s].count = count;
-		}
-
-	protected:
-		Axes axes;
-		Data data;
-		bool dirty = false;
-	};
-
-	template<typename TYPE>
-	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {
-		graph.plot(function);
-		return graph;
-	}
-
-	template<typename TYPE>
-	inline static Graph::Series& operator>>(TYPE y, Graph::Series& series) {
-		series.add(y);
-		return series;
-	}
-
-	inline static Graph::Series& operator>>(Graph::Point pt, Graph::Series& series) {
-		series.add(pt);
-		return series;
-	}
-
-	static Graph graph;
 
 	namespace Generic {
 		template<typename SIGNAL>
@@ -1921,18 +1398,6 @@ namespace klang {
 		return *this;
 	}
 
-	//template<typename TYPE>
-	//inline Modifier& operator>>(TYPE& input, Modifier& modifier) {
-	//	modifier << input;
-	//	return modifier;
-	//}
-
-	//template<typename TYPE>
-	//inline Modifier& operator>>(const TYPE& input, Modifier& modifier) {
-	//	modifier << input;
-	//	return modifier;
-	//}
-
 	inline static Function<float> sqrt(::sqrtf);
 	inline static Function<float> sqr([](float x) -> float { return x * x; });
 	inline static Function<float> cube([](float x) -> float { return x * x * x; });
@@ -1941,15 +1406,542 @@ namespace klang {
 	#define sqrt klang::sqrt // avoid conflict with std::sqrt
 	#define abs klang::abs   // avoid conflict with std::abs
 
-	//inline static Function<float>& operator>>(signal& source, Function<float>& function) {
-	//	function << source;
-	//	return function;
+	struct Console : public Text<16384> {
+		static std::mutex _lock;
+		thread_local static Text<16384> last;
+		int length = 0;
+
+		void clear() {
+			length = 0;
+			string[0] = 0;
+		}
+
+		Console& operator=(const char* in) {
+			std::lock_guard<std::mutex> lock(_lock);
+			length = std::min(capacity(), (int)strlen(in));
+			memcpy(string, in, length);
+			string[length] = 0;
+			return *this;
+		}
+
+		Console& operator=(const Console& in) {
+			std::lock_guard<std::mutex> lock(_lock);
+			length = std::min(capacity(), in.length);
+			memcpy(string, in.string, length);
+			string[length] = 0;
+			return *this;
+		}
+
+		Console& operator+=(const char* in) {
+			std::lock_guard<std::mutex> lock(_lock);
+			const int len = std::max(0, std::min(capacity() - length, (int)strlen(in)));
+			memcpy(&string[length], in, len);
+			length += len;
+			string[length] = 0;
+			memcpy(&last, in, len);
+			last.string[len] = 0;
+			return *this;
+		}
+
+		bool hasText() const {
+			return length != 0;
+		}
+
+		int getText(char* buffer) {
+			//if (!length) return 0;
+			std::lock_guard<std::mutex> lock(_lock);
+			const int _length = length;
+			memcpy(buffer, string, length);
+			buffer[length] = 0; // null terminator
+			clear();
+			return _length;
+		}
+	};
+
+	inline thread_local Text<16384> Console::last;
+
+#define PROFILE(func, ...) debug.print("%-16s = %fns\n", #func "(" #__VA_ARGS__ ")", debug.profile(1000, func, __VA_ARGS__));
+
+	struct Debug : Input {
+
+		struct Buffer : private buffer {
+			using buffer::clear;
+			using buffer::rewind;
+			using buffer::operator++;
+			using buffer::operator signal&;
+
+			Buffer() : buffer(16384) { }
+
+			enum Content {
+				Empty = 0,
+				Notes = 1,
+				Effect = 2,
+				Synth = 3,
+			} content = Empty;
+
+			/*		void attach(float* buffer, int size) {
+						Debug::buffer = new klang::buffer(buffer, size);
+					}
+
+					void detach() {
+						klang::buffer* tmp = buffer;
+						buffer = nullptr;
+						delete tmp;
+					}*/
+
+			bool active = false;
+			int used = 0;
+
+			const float* get() {
+				if (active) {
+					active = false;
+					return data();
+				}
+				else {
+					return nullptr;
+				}
+			}
+
+			Buffer& operator+=(const signal in) {
+				active = true;
+				buffer::operator+=(in);
+				return *this;
+			}
+
+			template<typename TYPE>
+			Buffer& operator+=(TYPE& in) {
+				active = true;
+				buffer::operator+=(in);
+				return *this;
+			}
+
+			signal& operator>>(signal& destination) const {
+				destination << *ptr;
+				return destination;
+			}
+
+			operator const signal& () const {
+				return *ptr;
+			}
+		};
+
+		thread_local static Buffer buffer; // support multiple threads/instances
+
+		Console console;
+
+		template <typename Func, typename... Args>
+		inline static double profile(Func func, Args... args) {
+			using namespace std::chrono;
+
+			auto start = high_resolution_clock::now();
+			func(args...);
+			auto end = high_resolution_clock::now();
+
+			auto duration = duration_cast<nanoseconds>(end - start).count();
+			return (double)duration;
+		}
+
+		template <typename Func, typename... Args>
+		inline static double profile(int times, Func func, Args... args) {
+			double sum = 0;
+			while (times--) {
+				sum += profile(func, args...);
+			}
+			return sum / 1000000.0;
+		}
+
+		struct Session {
+			Session(float*, int size, Buffer::Content content) {
+				//if (buffer) {
+					//debug.attach(buffer, size);
+				if (buffer.content != Buffer::Notes)
+					buffer.clear(size);
+				buffer.content = content;
+				buffer.rewind();
+				//}
+			}
+			~Session() {
+				//debug.detach();
+			}
+
+			bool hasAudio() const {
+				return buffer.active;
+			}
+			const float* getAudio() const {
+				return buffer.get();
+			}
+		};
+
+		void print(const char* format, ...) {
+			if (console.length < 10000) {
+				thread_local static char string[1024] = { 0 };
+				string[0] = 0;
+				va_list args;                     // Initialize the variadic argument list
+				va_start(args, format);           // Start variadic argument processing
+				vsnprintf(string, 1024, format, args);  // Safely format the string into the buffer
+				va_end(args);                     // Clean up the variadic argument list
+				console += string;
+			}
+		}
+
+		void printOnce(const char* format, ...) {
+			if (console.length < 1024) {
+				thread_local static char string[1024] = { 0 };
+				string[0] = 0;
+				va_list args;                     // Initialize the variadic argument list
+				va_start(args, format);           // Start variadic argument processing
+				vsnprintf(string, 1024, format, args);  // Safely format the string into the buffer
+				va_end(args);                     // Clean up the variadic argument list
+
+				if (console.last != string)
+					console += string;
+			}
+		}
+
+		bool hasText() const {
+			return console.hasText();
+		}
+
+		int getText(char* buffer) {
+			return console.getText(buffer);
+		}
+
+		operator const signal& () const {
+			return buffer.operator const klang::signal & ();
+		}
+
+		using Input::input;
+		void input() override {
+			buffer += in;
+		}
+	};
+
+	//inline static Debug::Buffer& operator>>(const signal source, Debug& debug) {
+	//	return debug.buffer += source;
 	//}
 
-	//inline static Function<float>& operator>>(const signal& source, Function<float>& function) {
-	//	function << source;
-	//	return function;
+	//template<typename TYPE>
+	//inline static Debug::Buffer& operator>>(TYPE& source, Debug& debug) {
+	//	return debug.buffer += source;
 	//}
+
+	static Debug debug;
+	inline thread_local Debug::Buffer Debug::buffer; //
+	inline std::mutex Console::_lock;
+
+#ifndef GRAPH_SIZE
+#define GRAPH_SIZE 44100
+#endif
+
+#define GRAPH_SERIES 4
+
+#define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
+
+	template <typename TYPE>
+	struct Result {
+		TYPE* y = nullptr;
+		int i = 0;
+		TYPE sum = 0;
+
+		Result(TYPE* array, int index) : y(&array[index]), i(index) { }
+
+		TYPE& operator[](int index) {
+			return *(y + index);
+		}
+
+		operator TYPE const () { return *y; }
+
+		Result& operator=(const TYPE& in) {
+			*y = in;
+			return *this;
+		}
+
+		TYPE& operator++(int) { i++; return *++y; }
+	};
+
+	template<typename TYPE, int SIZE>
+	struct Table : public Array<TYPE, SIZE> {
+		typedef Array<TYPE, SIZE> Array;
+		typedef Result<TYPE> Result;
+
+		using Array::add;
+
+		// single argument
+		Table(TYPE(*function)(TYPE)) {
+			for (int x = 0; x < SIZE; x++)
+				add(function(x));
+		}
+
+		// double argument
+		Table(void(*function)(TYPE, TYPE), TYPE arg) {
+			Array::count = SIZE;
+			for (int x = 0; x < SIZE; x++)
+				Array::items[x] = function(x, arg);
+		}
+
+		// single argument (enhanced)
+		Table(void(*function)(TYPE x, Result& y)) {
+			Array::count = SIZE;
+			Result y(Array::items, 0);
+			for (int x = 0; x < SIZE; x++) {
+				function((TYPE)x, y);
+				y.sum += Array::items[x];
+				y++;
+			}
+		}
+
+		Table(std::initializer_list<TYPE> values) {
+			for (TYPE value : values)
+				add(value);
+		}
+
+		using Array::operator[];
+		TYPE operator[](float index) {
+			if (index < 0) return Array::items[0];
+			else if (index >= (SIZE - 1)) return Array::items[SIZE - 1];
+			else {
+				const float x = std::floor(index);
+				const int i = int(x);
+				const float dx = index - x;
+				const float dy = Array::items[i + 1] - Array::items[i];
+				return Array::items[i] + dx * dy;
+			}
+		}
+	};
+
+	struct Graph : Input {
+		struct Point {
+			double x, y;
+			bool valid() const { return !isnan(x) && !isinf(x) && !isnan(y); } // NB: y can be +/- inf
+		};
+
+		struct Axis;
+
+		struct Series : public Array<Point, GRAPH_SIZE + 1>, Input {
+			void* function = nullptr;
+			using Array::add;
+			void add(double y) {
+				add({ (double)Array::size(), y });
+			}
+
+			template<class TYPE>
+			void plot(TYPE f, const Axis& x_axis) {
+				if (function != (void*)f) {
+					clear();
+					function = (void*)f;
+					double x = 0;
+					const double dx = x_axis.range() / GRAPH_SIZE;
+					for (int i = 0; i <= GRAPH_SIZE; i++) {
+						x = x_axis.min + i * dx;
+						add({ x, (double)f(x) });
+					}
+				}
+			}
+
+			bool operator==(const Series& in) const {
+				if (count != in.count) return false;
+				for (unsigned int i = 0; i < count; i++)
+					if (items[i].x != in.items[i].x || items[i].y != in.items[i].y)
+						return false;
+				return true;
+			}
+
+			bool operator!=(const Series& in) const {
+				return !operator==(in);
+			}
+
+			using Input::input;
+			void input() override {
+				add(in);
+			}
+		};
+
+		struct Axis {
+			double min = 0, max = 0;
+			bool valid() const { return max != min; }
+			double range() const { return max - min; }
+			bool contains(double value) const { return value >= min && value <= max; }
+			void clear() { min = max = 0; }
+
+			void from(const Series& series, double Point::* axis) {
+				if (!series.count) return;
+				int points = 0;
+				for (unsigned int p = 0; p < series.count; p++) {
+					const Point& pt = series[p];
+					if (pt.valid() && !isinf(pt.*axis)) {
+						if (!points || pt.*axis < min) min = pt.*axis;
+						if (!points || pt.*axis > max) max = pt.*axis;
+						points++;
+					}
+				}
+				if (std::abs(max) < 0.0000000001) max = 0;
+				if (std::abs(min) < 0.0000000001) min = 0;
+				if (std::abs(max) > 1000000000.0) max = 0;
+				if (std::abs(min) > 1000000000.0) min = 0;
+				if (min > max) max = min = 0;
+			}
+		};
+
+		struct Axes {
+			Axis x, y;
+			bool valid() const { return x.valid() && y.valid(); }
+			void clear() { x = { 0,0 }; y = { 0,0 }; }
+			bool contains(const Point& pt) const { return x.contains(pt.x) && y.contains(pt.y); }
+		};
+
+		void clear() {
+			dirty = true;
+			axes.clear();
+			for (int s = 0; s < GRAPH_SERIES; s++)
+				data[s].clear();
+			data.clear();
+		}
+
+		bool isActive() const {
+			if (data.count)
+				return true;
+			for (int s = 0; s < GRAPH_SERIES; s++)
+				if (data[s].count)
+					return true;
+			return false;
+		}
+
+		struct Data : public Array<Series, GRAPH_SERIES> {
+			Series* find(void* function) {
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					if (operator[](s).function == function)
+						return &items[s];
+				return nullptr;
+			}
+		};
+
+		Graph& operator()(double min, double max) {
+			dirty = true;
+			axes.x.min = min; axes.x.max = max;
+			return *this;
+		}
+
+		Graph::Series& operator[](int index) {
+			dirty = true;
+			return data[index];
+		}
+
+		const Graph::Series& operator[](int index) const {
+			return data[index];
+		}
+
+		Graph& operator()(double x_min, double x_max, double y_min, double y_max) {
+			dirty = true;
+			axes.x.min = x_min; axes.x.max = x_max;
+			axes.y.min = y_min; axes.y.max = y_max;
+			return *this;
+		}
+
+		operator Series& () {
+			dirty = true;
+			return data[0];
+		}
+
+		template<class TYPE>
+		void plot(TYPE function) {
+			Graph::Series* series = Graph::data.find((void*)function);
+			if (!series)
+				series = Graph::data.add();
+			if (series) {
+				dirty = true;
+				if (!axes.x.valid())
+					axes.x = { -1, 1 };
+				series->plot(function, axes.x);
+			}
+		}
+
+		template<typename TYPE>
+		void add(TYPE y) { data[0].add(y); }
+		void add(const Point pt) { data[0].add(pt); }
+
+		template<typename TYPE>
+		Graph& operator+=(TYPE y) { data[0].add(y); return *this; }
+		Graph& operator+=(const Point pt) { data[0].add(pt); return *this; }
+
+		template<typename TYPE>
+		Graph& operator=(TYPE(*function)(TYPE)) {
+			plot(function);
+			return *this;
+		}
+
+		Graph& operator=(std::initializer_list<Point> values) {
+			clear(); return operator+=(values);
+		}
+
+		Graph& operator+=(std::initializer_list<Point> values) {
+			for (const auto& value : values)
+				add(value);
+			return *this;
+		}
+
+		using Input::input;
+		void input() override {
+			add(in);
+		}
+
+		// returns the user-defined axes
+		const Axes& getAxes() const { return axes; }
+
+		// calculates axes based on data
+		void getAxes(Axes& axes) const {
+			if (!axes.x.valid()) {
+				axes.x.clear();
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					axes.x.from(data[s], &Point::x);
+				if (!axes.y.valid() && axes.y.max != 0)
+					axes.y.min = 0;
+			}
+			if (!axes.y.valid()) {
+				axes.y.clear();
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					axes.y.from(data[s], &Point::y);
+				if (!axes.y.valid() && axes.y.max != 0)
+					axes.y.min = 0;
+			}
+		}
+
+		const Data& getData() const { return data; }
+		bool isDirty() const { return dirty; }
+		void setDirty(bool dirty) { Graph::dirty = dirty; }
+
+		void truncate(unsigned int count) {
+			if (count < data.count)
+				data.count = count;
+
+			for (int s = 0; s < GRAPH_SERIES; s++)
+				if (count < data[s].count)
+					data[s].count = count;
+		}
+
+	protected:
+		Axes axes;
+		Data data;
+		bool dirty = false;
+	};
+
+	template<typename TYPE>
+	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {
+		graph.plot(function);
+		return graph;
+	}
+
+	//template<typename TYPE>
+	//inline static Graph::Series& operator>>(TYPE y, Graph::Series& series) {
+	//	series.add(y);
+	//	return series;
+	//}
+
+	inline static Graph::Series& operator>>(Graph::Point pt, Graph::Series& series) {
+		series.add(pt);
+		return series;
+	}
+
+	static Graph graph;
 
 	template<int SIZE>
 	struct Delay : public Modifier {
@@ -2003,6 +1995,16 @@ namespace klang {
 
 		virtual void set(param delay) override {
 			Delay::time = delay <= SIZE ? (float)delay : SIZE;
+		}
+
+		template<typename TIME>
+		signal operator()(TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>)
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
 		}
 
 		template<typename TIME>
@@ -3849,4 +3851,5 @@ namespace klang {
 
 	//using namespace optimised;
 };
+
 //using namespace klang;

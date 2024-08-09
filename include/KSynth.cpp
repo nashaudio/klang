@@ -20,9 +20,9 @@ extern "C" {
 
 PTR_FUNCTION synthCreate(float sampleRate) {                                                                            
     klang::fs = sampleRate;                                                                                             
-    ::stk::Stk::setSampleRate(sampleRate);                                                                              
+    //::stk::Stk::setSampleRate(sampleRate);                                                                              
     try { 
-        return (DSP::Synth*)new KSynth(new PLUGIN_NAME());
+        return (MiniPlugin::Synth*)new KSynth(new PLUGIN_NAME());
     } catch (...) {
         return nullptr;
     }
@@ -30,7 +30,7 @@ PTR_FUNCTION synthCreate(float sampleRate) {
 
 VOID_FUNCTION synthDestroy(void* synth) {                                                                               
     try {
-        delete (DSP::Synth*)synth;
+        delete (MiniPlugin::Synth*)synth;
     } catch (...) { }
 }                                                                                                                       
                                                                                                                             
@@ -41,23 +41,23 @@ VOID_FUNCTION getBackground(void** data, int* size) {
 
 INT_FUNCTION getDebugData(void* synth, const float** const buffer, int* size, void** graph, void** console) {
     try {
-        if (buffer) *size = ((DSP::Synth*)synth)->getDebugAudio(buffer);
-        if (graph) ((DSP::Synth*)synth)->getDebugGraph(graph);          
-        if (console) ((DSP::Synth*)synth)->getDebugConsole(console);
+        if (buffer) *size = ((MiniPlugin::Synth*)synth)->getDebugAudio(buffer);
+        if (graph) ((MiniPlugin::Synth*)synth)->getDebugGraph(graph);
+        if (console) ((MiniPlugin::Synth*)synth)->getDebugConsole(console);
         return 0;                                                       
     } catch (...) { return 1; }                                         
 }
                                                                                                                            
 INT_FUNCTION noteOnStart(void* note, int pitch, float velocity){                                                                
     try { 
-        ((DSP::Note*)note)->onStartNote(pitch, velocity);
+        ((MiniPlugin::Note*)note)->onStartNote(pitch, velocity);
         return 0;
     } CATCH_ALL(1)
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION noteOnStop(void* note, float velocity, bool* hasRelease = NULL){                                           
     try { 
-        bool terminate = ((DSP::Note*)note)->onStopNote(velocity);
+        bool terminate = ((MiniPlugin::Note*)note)->onStopNote(velocity);
         if (hasRelease) *hasRelease = !terminate;                                                                     
         return 0;                                                                                                     
     } CATCH_ALL(1)
@@ -65,33 +65,33 @@ INT_FUNCTION noteOnStop(void* note, float velocity, bool* hasRelease = NULL){
                                                                                                                             
 INT_FUNCTION noteOnPitchWheel(void* note, int value){                                                                   
     try { 
-        ((DSP::Note*)note)->onPitchWheel(value);
+        ((MiniPlugin::Note*)note)->onPitchWheel(value);
         return 0;                                                           
     } CATCH_ALL(1)
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION noteOnControlChange(void* note, int controller, int value){                                                
     try { 
-        ((DSP::Note*)note)->onControlChange(controller, value);
+        ((MiniPlugin::Note*)note)->onControlChange(controller, value);
         return 0;                                            
     } CATCH_ALL(1)
 }                                                                                                                       
 
 INT_FUNCTION noteProcess(void* note, float** outputBuffers, int numSamples, bool* shouldContinue = NULL) {
     try {
-        bool bContinue = ((DSP::Note*)note)->process(outputBuffers, 2, numSamples);
+        bool bContinue = ((MiniPlugin::Note*)note)->process(outputBuffers, 2, numSamples);
         if(shouldContinue) *shouldContinue = bContinue;                                                               
         return 0;                                                                                                     
     } CATCH_ALL(1)
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION synthProcess(void* synth, const float** inputBuffers, float** outputBuffers, int numSamples) {             
-//    try { 
-    ((DSP::Synth*)synth)->process(inputBuffers, outputBuffers, numSamples); 
+    try { 
+        ((MiniPlugin::Synth*)synth)->process(inputBuffers, outputBuffers, numSamples);
         return 0;                            
-//    } catch (...) {
-//        return 1;
-//    }
+    } catch (...) {
+        return 1;
+    }
 }
 
 };

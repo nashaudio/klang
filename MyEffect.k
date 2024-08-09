@@ -14,7 +14,7 @@ struct MyEffect : Effect {
 		mean = Mean;
 	
 		controls = { 
-			Dial("Gain", 0.0, 1.0, 0.5),
+			Dial("Gain4", 0.0, 1.0, 0.5),
 			Meter("Level", 0, 1, 0),
 			Menu("Follower", "RMS", "Window", "Peak", "Mean")
 		};

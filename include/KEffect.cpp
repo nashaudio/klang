@@ -15,8 +15,8 @@ extern "C" {
     PTR_FUNCTION effectCreate(float sampleRate) {                                                                           
         try {
             klang::fs = sampleRate;
-            ::stk::Stk::setSampleRate(sampleRate);
-            return (DSP::Effect*)new KEffect(new PLUGIN_NAME());
+            //::stk::Stk::setSampleRate(sampleRate);
+            return (MiniPlugin::Effect*)new KEffect(new PLUGIN_NAME());
         } catch(...) {
 			return nullptr;
 		}
@@ -29,20 +29,20 @@ extern "C" {
 
     INT_FUNCTION getDebugData(void* effect, const float** const buffer, int* size, void** graph, void** console) {
         try {
-            if (buffer) *size = ((DSP::Effect*)effect)->getDebugAudio(buffer);
-            if (graph) ((DSP::Effect*)effect)->getDebugGraph(graph);
-            if (console) ((DSP::Effect*)effect)->getDebugConsole(console);
+            if (buffer) *size = ((MiniPlugin::Effect*)effect)->getDebugAudio(buffer);
+            if (graph) ((MiniPlugin::Effect*)effect)->getDebugGraph(graph);
+            if (console) ((MiniPlugin::Effect*)effect)->getDebugConsole(console);
             return 0;
         } catch (...) { return 1; }
     }
                                                                                                                             
     VOID_FUNCTION effectDestroy(void* effect) {                                                                             
-        try { delete (DSP::Effect*)effect; }
+        try { delete (MiniPlugin::Effect*)effect; }
 		catch(...) { }
     }                                                                                                                       
                                                                                                                             
     INT_FUNCTION effectProcess(void* effect, const float** inputBuffers, float** outputBuffers, int numSamples) {           
-        try { ((DSP::Effect*)effect)->process(inputBuffers, outputBuffers, numSamples); return 0;
+        try { ((MiniPlugin::Effect*)effect)->process(inputBuffers, outputBuffers, numSamples); return 0;
         } catch(...) { return 1; }                                                                                          
     }                                                                                                                       
 }

@@ -34,7 +34,7 @@ struct Compressor : Effect {
 
 	void prepare() {
 		follower.set(sqr(controls[6]), sqr(controls[7]));
-		follower = Envelope::Follower::Peak;
+		follower = Peak;
 		
 		compress.threshold = dB(controls[1]) -> Amplitude;
 		compress.gate =         controls[2] == 0 ? 0.f 

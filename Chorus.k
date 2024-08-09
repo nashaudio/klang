@@ -1,6 +1,6 @@
 
 #include <klang.h>
-using namespace klang::optimised;
+using namespace klang::basic;
 
 struct Chorus : Stereo::Effect {
 
@@ -40,7 +40,7 @@ struct Chorus : Stereo::Effect {
 		}
 		
 		void process() {
-			osc * depth + offset >> out;
+			(osc * depth + offset) >> out;
 		}
 	};
 	
@@ -51,6 +51,8 @@ struct Chorus : Stereo::Effect {
 		Delay<192000> delay;
 		Modulator mod[5];
 		
+		Delay<192000> echo;
+		
 		param rnd_f, rnd_ad, rnd_ao;
 		
 		void prepare() {
@@ -60,24 +62,29 @@ struct Chorus : Stereo::Effect {
 			const param ad_d = controls[4];
 			const param ao =   controls[5] * rnd_ao;
 			const float ms = fs / 1000.f;
-			
+					
 			mod[0].set(f - f * f_d * 2.f, (ad - ad * ad_d * 2.f) * ms, (ao - ao * 1.0f) * ms);
 			mod[1].set(f - f * f_d,       (ad - ad * ad_d)       * ms, (ao - ao * 0.5f) * ms);
 			mod[2].set(f, 			       ad                    * ms,  ao              * ms);
 			mod[3].set(f + f * f_d,       (ad + ad * ad_d)       * ms, (ao + ao * 0.5f) * ms);
 			mod[4].set(f + f * f_d * 2.f, (ad + ad * ad_d * 2.f) * ms, (ao + ao * 1.0f) * ms);	
+			
+			echo.set(0.5 * fs);
 		}
 		
 		void process() {
 			const param gain = controls[0];
 			
 			in >> delay;			
+//			in >> echo;
 			
 			in + gain * ( delay(mod[0]) 
 			            + delay(mod[1]) 
 			            + delay(mod[2]) 
 			            + delay(mod[3]) 
 			            + delay(mod[4]) ) >> out;
+
+//			in + gain * echo(0.5 * fs) >> out;
 		}
 	};
 	

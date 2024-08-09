@@ -6,23 +6,24 @@
 //
 
 #include "plugin.h"
-#include "dsp.h"
+//#include "dsp.h"
 #include "klang.h"
 
 #pragma once
 
-class KSynth : public DSP::Synth
+class KSynth : public MiniPlugin::Synth
 {
 public:
     template<class SYNTH>
-    class Note : public DSP::Note
+    class Note : public MiniPlugin::Note
     {
     public:
-        Note(DSP::Synth* synth, typename SYNTH::Note* note) : DSP::Note(synth), note(note) {
-            parameters = *(DSP::Parameters*)&synth->parameters;
-            presets = *(DSP::Presets*)&synth->presets;
-        }     // constructor (initialise variables, etc.)
-        ~Note() { delete note; }                           // destructor (clean up, free memory, etc.)
+        // constructor (initialise variables, etc.)
+        Note(MiniPlugin::Synth* synth, typename SYNTH::Note* note) : MiniPlugin::Note(synth), note(note) {
+            parameters = synth->parameters;
+            presets = synth->presets;
+        }     
+        ~Note() { delete note; } // destructor (clean up, free memory, etc.)
 
         KSynth* getSynth() { return (KSynth*)synth; }
     
@@ -32,7 +33,7 @@ public:
 
                 const int nbParameters = std::min(parameters.count, note->controls.size());
                 for (int p = 0; p < nbParameters; p++)
-                    parameters[p] = note->controls[p];
+                    parameters[p].set(note->controls[p]);
             }
         }
         bool onStopNote(float velocity) {
@@ -71,7 +72,7 @@ public:
                     buffer[1] = buffer[0];
 
                 for (int p = 0; p < nbParameters; p++)
-                    parameters[p] = note->controls[p];
+                    parameters[p].set(note->controls[p]);
             }
             return bContinue;
         }
@@ -93,8 +94,8 @@ public:
         for (int n = 0; n < 128; n++) // create synthesiser's notes
             notes[n] = new Note<TYPE>(this, synth->notes[n]);
 
-        parameters = *(DSP::Parameters*)&synth->controls;
-        presets = *(DSP::Presets*)&synth->presets;
+        parameters = *(klang::Controls*)&synth->controls;
+        presets = *(MiniPlugin::Presets*)&synth->presets;
     }
 
     void setSampleRate(float sampleRate){ klang::fs = sampleRate; }
@@ -138,7 +139,7 @@ public:
                 debug.console = &klang::debug.console;
 
             for (int p = 0; p < nbParameters; p++)
-                parameters[p] = synth.control(p);
+                parameters[p].set(synth.control(p));
         }
     }
     

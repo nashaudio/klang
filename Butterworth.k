@@ -9,7 +9,7 @@ struct Butterworth : Synth {
 		ADSR adsr;
 
 		event on(Pitch pitch, Amplitude velocity) {
-			const param f = pitch > Type::Frequency;
+			const param f = pitch -> Frequency;
 			osc(f, 0);
 			adsr(0.001, 0, 1, 0.25);
 		}
