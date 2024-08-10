@@ -6,7 +6,6 @@
 //
 
 #include "plugin.h"
-//#include "dsp.h"
 #include "klang.h"
 
 #pragma once
@@ -148,14 +147,11 @@ public:
     void buttonPressed(int iButton) { }
 
 private:
-    // Declare shared member variables here
-
+    // Class to accomodate mono/stereo versions of the synth
     struct Synth {
         Synth(klang::mono::Synth* mono) : mono(mono) { }
         Synth(klang::stereo::Synth* stereo) : stereo(stereo) { }
-        ~Synth() {
-            delete mono; delete stereo;
-        }
+        ~Synth() { delete mono; delete stereo; }
 
         bool isMono() const { return mono; }
         bool isStereo() const { return stereo; }
