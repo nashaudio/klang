@@ -17,11 +17,27 @@
 
 #include <float.h>
 
+#ifdef __wasm__
+#define THREAD_LOCAL 
+static inline float _sqrt(float x) { return __builtin_sqrtf(x); }
+static inline float _abs(float x) { return __builtin_fabsf(x); }
+#define SQRT _sqrt
+#define SQRTF _sqrt
+#define ABS _abs
+#define FABS _abs
+#else
+#define THREAD_LOCAL thread_local
+#define SQRT ::sqrt
+#define SQRTF ::sqrtf
+#define ABS ::abs
+#define FABS ::fabsf
+#endif
+
 // provide access to original math functions through std:: prefix
 namespace std {
 	namespace klang {
-		template<typename TYPE> TYPE sqrt(TYPE x) { return ::sqrt(x); }
-		template<typename TYPE> TYPE abs(TYPE x) { return ::abs(x); }
+		template<typename TYPE> TYPE sqrt(TYPE x) { return SQRT(x); }
+		template<typename TYPE> TYPE abs(TYPE x) { return ABS(x); }
 	}
 };
 
@@ -669,7 +685,7 @@ namespace klang {
 
 		// convert note number to pitch class and octave (e.g. C#5)
 		const char* text() const {
-			thread_local static char buffer[32] = { 0 };
+			THREAD_LOCAL static char buffer[32] = { 0 };
 			const char* const notes[12] = { "C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B" };
 			snprintf(buffer, 32, "%s%d", notes[(int)value % 12], (int)value / 12);
 			return buffer;
@@ -680,7 +696,7 @@ namespace klang {
 			return this;
 		}
 
-		thread_local static struct Convert {
+		THREAD_LOCAL static struct Convert {
 			float pitch;
 			operator param() {
 				return 440.f * power(2.f, (pitch - 69.f) / 12.f);
@@ -693,7 +709,7 @@ namespace klang {
 		template<typename TYPE>	Pitch operator/(TYPE in) { return value / in; }
 	};
 
-	inline thread_local Pitch::Convert Pitch::Frequency;
+	inline THREAD_LOCAL Pitch::Convert Pitch::Frequency;
 
 	struct Frequency : public param { 
 		//INFO("Frequency", 1000.f, -FLT_MAX, FLT_MAX)
@@ -732,7 +748,7 @@ namespace klang {
 			return this;
 		}
 
-		thread_local static Conversion Amplitude;
+		THREAD_LOCAL static Conversion Amplitude;
 	};
 
 	// amplitude (linear gain)
@@ -757,11 +773,11 @@ namespace klang {
 			return this;
 		}
 
-		thread_local static Conversion dB;
+		THREAD_LOCAL static Conversion dB;
 	};
 
-	thread_local inline Conversion dB::Amplitude;
-	thread_local inline Conversion Amplitude::dB;
+	THREAD_LOCAL inline Conversion dB::Amplitude;
+	THREAD_LOCAL inline Conversion Amplitude::dB;
 	typedef Amplitude Velocity;
 
 	struct Control
@@ -1036,8 +1052,6 @@ namespace klang {
 		void rewind(int offset = 0) {
 #ifdef _MSC_VER
 			_controlfp_s(nullptr, _DN_FLUSH, _MCW_DN);
-#else
-			_controlfp(_DN_FLUSH, _MCW_DN); // flush denormals to zero
 #endif
 			ptr = (signal*)&samples[offset];
 			end = (signal*)&samples[size];
@@ -1398,17 +1412,17 @@ namespace klang {
 		return *this;
 	}
 
-	inline static Function<float> sqrt(::sqrtf);
+	inline static Function<float> sqrt(SQRTF);
+	inline static Function<float> abs(FABS);
 	inline static Function<float> sqr([](float x) -> float { return x * x; });
 	inline static Function<float> cube([](float x) -> float { return x * x * x; });
-	inline static Function<float> abs(::fabsf);
 
 	#define sqrt klang::sqrt // avoid conflict with std::sqrt
 	#define abs klang::abs   // avoid conflict with std::abs
 
 	struct Console : public Text<16384> {
 		static std::mutex _lock;
-		thread_local static Text<16384> last;
+		THREAD_LOCAL static Text<16384> last;
 		int length = 0;
 
 		void clear() {
@@ -1458,7 +1472,7 @@ namespace klang {
 		}
 	};
 
-	inline thread_local Text<16384> Console::last;
+	inline THREAD_LOCAL Text<16384> Console::last;
 
 #define PROFILE(func, ...) debug.print("%-16s = %fns\n", #func "(" #__VA_ARGS__ ")", debug.profile(1000, func, __VA_ARGS__));
 
@@ -1525,7 +1539,7 @@ namespace klang {
 			}
 		};
 
-		thread_local static Buffer buffer; // support multiple threads/instances
+		THREAD_LOCAL static Buffer buffer; // support multiple threads/instances
 
 		Console console;
 
@@ -1574,7 +1588,7 @@ namespace klang {
 
 		void print(const char* format, ...) {
 			if (console.length < 10000) {
-				thread_local static char string[1024] = { 0 };
+				THREAD_LOCAL static char string[1024] = { 0 };
 				string[0] = 0;
 				va_list args;                     // Initialize the variadic argument list
 				va_start(args, format);           // Start variadic argument processing
@@ -1586,7 +1600,7 @@ namespace klang {
 
 		void printOnce(const char* format, ...) {
 			if (console.length < 1024) {
-				thread_local static char string[1024] = { 0 };
+				THREAD_LOCAL static char string[1024] = { 0 };
 				string[0] = 0;
 				va_list args;                     // Initialize the variadic argument list
 				va_start(args, format);           // Start variadic argument processing
@@ -1626,7 +1640,7 @@ namespace klang {
 	//}
 
 	static Debug debug;
-	inline thread_local Debug::Buffer Debug::buffer; //
+	inline THREAD_LOCAL Debug::Buffer Debug::buffer; //
 	inline std::mutex Console::_lock;
 
 #ifndef GRAPH_SIZE
@@ -2423,7 +2437,7 @@ namespace klang {
 		void setTargetTime(const Point& point, float time = 0.0) {
 			this->time = time;
 			ramp->setTarget(point.y);
-			ramp->setRate(fabsf(point.y - ramp->out) / ((point.x - time) * fs));
+			ramp->setRate(abs(point.y - ramp->out) / ((point.x - time) * fs));
 		}
 
 		void setTargetRate(const Point& point, float rate = 0.0) {

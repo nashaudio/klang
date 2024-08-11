@@ -87,6 +87,10 @@
     <ClInclude Include="..\MySynth.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\include\wasm.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="..\MyEffect.cpp" />
     <ClCompile Include="..\MyNote.cpp" />
     <ClCompile Include="..\MySynth.cpp" />
