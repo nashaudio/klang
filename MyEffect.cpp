@@ -18,6 +18,7 @@ MyEffect::MyEffect()
     parameters.add("Rate", Parameter::ROTARY, 1.0, 100.0,10.0, AUTO_SIZE);
 	parameters.add("Output Gain");
 	parameters.add("Another");
+	parameters.add("Menu", Parameter::MENU, { "One", "Two" } );
 	
     // Add factory presets
     presets.add( "Preset 3", 0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f, 8.f, 9.f );

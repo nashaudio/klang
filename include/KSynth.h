@@ -6,7 +6,7 @@
 //
 
 #include "plugin.h"
-#include "klang.h"
+//#include "klang.h"
 
 #pragma once
 
@@ -40,6 +40,16 @@ public:
                 return note->release(velocity);
             return true;
         }
+
+        void onControl(int param, float value) {
+            if (note)
+				note->onControl(param, value);
+        }
+        void onPreset(int preset) {
+            if (note)
+                note->onPreset(preset);
+        }
+
         void onPitchWheel (int value) { }
         void onControlChange(int controller, int value) {
             if (note)
@@ -141,10 +151,28 @@ public:
                 parameters[p].set(synth.control(p));
         }
     }
-    
-    void presetLoaded(int iPresetNum, const char *sPresetName) { }
-    void optionChanged(int iOptionMenu, int iItem) { }
-    void buttonPressed(int iButton) { }
+
+    void onControl(int parameter, float value) {
+        if (synth) {
+            if (synth.isMono())
+                synth.mono->onControl(parameter, value);
+            else
+                synth.stereo->onControl(parameter, value);
+        }
+    }
+
+    void onPreset(int preset) {
+        if (synth) {
+            if (synth.isMono())
+                synth.mono->onPreset(preset);
+            else
+                synth.stereo->onPreset(preset);
+        }
+    }
+
+    //void presetLoaded(int iPresetNum, const char *sPresetName) { }
+    //void optionChanged(int iOptionMenu, int iItem) { }
+    //void buttonPressed(int iButton) { }
 
 private:
     // Class to accomodate mono/stereo versions of the synth

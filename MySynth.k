@@ -1,7 +1,5 @@
 
 #include <klang.h>
-//#include <klang/tests.h>
-
 using namespace klang::optimised;
 
 struct TB303 : Modifier {
@@ -80,6 +78,14 @@ struct TB303 : Modifier {
 
 struct MySynth : Synth {
 
+	event control(int parameter, float value){
+		debug.print("S %d = %f\n", parameter, value);
+	}
+	
+	event preset(int index){
+		debug.print("S Preset = %d\n", index);
+	}
+
 	struct MyNote : public Note {
 		Saw saw;
 		Square square;
@@ -87,6 +93,14 @@ struct MySynth : Synth {
 		TB303 filter;
 		Envelope flt;
 		param f;
+		
+		event control(int parameter, float value){
+			debug.print("N %d = %f\n", parameter, value);
+		}
+	
+		event preset(int index){
+			debug.print("N Preset = %d\n", index);
+		}
 
 		event on(Pitch pitch, Velocity velocity) { 
 			f = pitch -> Frequency;

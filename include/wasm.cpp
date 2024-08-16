@@ -693,7 +693,7 @@ struct DX7 : Synth {
 		}
 	};
 
-	void onParameter(int index, float value) override {
+	void onControl(int index, float value) override {
 		for(int b=0; b<3; b++)
 			controls[b].set(b == index ? 1.f : 0.f);
 	}
@@ -1137,7 +1137,7 @@ struct KSynth : public SYNTH {
 
 	void setParameter(int index, float value) {
 		controls[index].set(std::clamp(value, controls[index].min, controls[index].max));
-		onParameter(index, controls[index]);
+		onControl(index, controls[index]);
 		if(controls[index].type == Control::BUTTON)
 		 	controls[index].set(0.f); // release push button
 	}

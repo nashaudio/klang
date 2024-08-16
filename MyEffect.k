@@ -1,6 +1,8 @@
 #include <klang.h>
 using namespace klang::optimised;
 
+int global = 24;
+
 struct MyEffect : Effect {
 
 	Envelope::Follower rms;
@@ -18,6 +20,18 @@ struct MyEffect : Effect {
 			Meter("Level", 0, 1, 0),
 			Menu("Follower", "RMS", "Window", "Peak", "Mean")
 		};
+		
+		presets = {
+			{ "Copied Preset", { 0.500, 0, 0 } },
+		};
+	}
+	
+	event control(int parameter, float value){
+		debug.print("%d = %f\n", parameter, value);
+	}
+	
+	event preset(int index){
+		debug.print("Preset = %d\n", index);
 	}
 
 	// Apply processing (called once per sample)

@@ -41,40 +41,65 @@ namespace klang { struct Graph; struct Console; }
 
 #if defined(_WIN32)
 #define PTR_FUNCTION   __declspec(dllexport) void* __stdcall
+#define UINT_FUNCTION   __declspec(dllexport) unsigned int __stdcall
 #define INT_FUNCTION   __declspec(dllexport) int __stdcall
 #define VOID_FUNCTION  __declspec(dllexport) void __stdcall
 #else
 #define PTR_FUNCTION   void*
+#define UINT_FUNCTION   unsigned int
 #define INT_FUNCTION   int
 #define VOID_FUNCTION  void
 #endif
 
-#if !KLANG
-
-#define EFFECT(name)                                                                                                        \
+#define PLUGIN(CLASS)                                                                                                       \
 extern "C" {                                                                                                                \
-    PTR_FUNCTION effectCreate(float sampleRate) {                                                                           \
-        ::stk::Stk::setSampleRate(sampleRate);                                                                              \
-        return (MiniPlugin::Effect*)new name();                                                                             \
-    }                                                                                                                       \
-                                                                                                                            \
+    UINT_FUNCTION getVersion() { return *(unsigned int*)(&klang::version); }                                                \
+																															\
     VOID_FUNCTION getBackground(void** data, int* size) {                                                                   \
         *data = (void*)Background::data;                                                                                    \
         *size = Background::size;                                                                                           \
     }                                                                                                                       \
                                                                                                                             \
-    INT_FUNCTION getDebugData(void* effect, const float** const buffer, int* size, void** graph, void** console) {          \
+    INT_FUNCTION getDebugData(void* plugin, const float** const buffer, int* size, void** graph, void** console) {          \
         try {                                                                                                               \
-            if (buffer) *size = ((MiniPlugin::Effect*)effect)->getDebugAudio(buffer);                                       \
-            if (graph) ((MiniPlugin::Effect*)effect)->getDebugGraph(graph);                                                 \
-            if (console) ((MiniPlugin::Effect*)effect)->getDebugConsole(console);                                           \
+            if (buffer) *size = ((CLASS*)plugin)->getDebugAudio(buffer);                                                    \
+            if (graph) ((CLASS*)plugin)->getDebugGraph(graph);                                                              \
+            if (console) ((CLASS*)plugin)->getDebugConsole(console);                                                        \
             return 0;                                                                                                       \
         }                                                                                                                   \
         catch (...) { return 1; }                                                                                           \
     }                                                                                                                       \
+}
+
+
+#if !KLANG
+#define EFFECT(NAME)                                                                                                        \
+extern "C" {                                                                                                                \
+    PLUGIN(MiniPlugin::Effect)                                                                                              \
+																															\
+    PTR_FUNCTION effectCreate(float sampleRate) {                                                                           \
+        try {                                                                                                               \
+            klang::fs = sampleRate;                                                                                         \
+            ::stk::Stk::setSampleRate(sampleRate);                                                                          \
+            return (MiniPlugin::Effect*)new NAME();                                                                         \
+        } catch (...) {                                                                                                     \
+            return nullptr;                                                                                                 \
+        }                                                                                                                   \
+    }                                                                                                                       \
                                                                                                                             \
     VOID_FUNCTION effectDestroy(void* effect) {                                                                             \
-        delete (MiniPlugin::Effect*)effect;                                                                                 \
+        try { delete (NAME*)effect; }                                                                                       \
+        catch (...) { }                                                                                                     \
+    }                                                                                                                       \
+                                                                                                                            \
+    INT_FUNCTION effectOnControl(void* effect, int param, float value) {                                                    \
+        try { ((MiniPlugin::Effect*)effect)->onControl(param, value); return 0; }                                           \
+        catch (...) { return 1; }                                                                                           \
+    }                                                                                                                       \
+                                                                                                                            \
+    INT_FUNCTION effectOnPreset(void* effect, int param) {                                                                  \
+        try { ((MiniPlugin::Effect*)effect)->onPreset(param); return 0; }                                                   \
+        catch (...) { return 1; }                                                                                           \
     }                                                                                                                       \
                                                                                                                             \
     INT_FUNCTION effectProcess(void* effect, const float** inputBuffers, float** outputBuffers, int numSamples) {           \
@@ -83,30 +108,16 @@ extern "C" {                                                                    
     }                                                                                                                       \
 }
 
-#define SYNTH(name)                                                                                                         \
+#define SYNTH(NAME)                                                                                                         \
 extern "C" {                                                                                                                \
     PTR_FUNCTION synthCreate(float sampleRate) {                                                                            \
         ::stk::Stk::setSampleRate(sampleRate);                                                                              \
-        return (MiniPlugin::Synth*)new name();                                                                              \
+        return (MiniPlugin::Synth*)new NAME();                                                                              \
     }                                                                                                                       \
                                                                                                                             \
     VOID_FUNCTION synthDestroy(void* synth) {                                                                               \
-        delete (MiniPlugin::Synth*)synth;                                                                                   \
-    }                                                                                                                       \
-                                                                                                                            \
-    VOID_FUNCTION getBackground(void** data, int* size) {                                                                   \
-        *data = (void*)Background::data;                                                                                    \
-        *size = Background::size;                                                                                           \
-    }                                                                                                                       \
-                                                                                                                            \
-    INT_FUNCTION getDebugData(void* synth, const float** const buffer, int* size, void** graph, void** console) {           \
-        try {                                                                                                               \
-            if (buffer) *size = ((MiniPlugin::Synth*)synth)->getDebugAudio(buffer);                                         \
-            if (graph) ((MiniPlugin::Synth*)synth)->getDebugGraph(graph);                                                   \
-            if (console) ((MiniPlugin::Synth*)synth)->getDebugConsole(console);                                             \
-            return 0;                                                                                                       \
-        }                                                                                                                   \
-        catch (...) { return 1; }                                                                                           \
+        try { delete (NAME*)synth; }                                                                                        \
+        catch (...) { }                                                                                                     \
     }                                                                                                                       \
                                                                                                                             \
     INT_FUNCTION noteOnStart(void* note, int pitch, float velocity){                                                        \
@@ -131,6 +142,16 @@ extern "C" {                                                                    
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \
                                                                                                                             \
+    INT_FUNCTION noteOnControl(void* note, int param, float value) {                                                        \
+        try { ((MiniPlugin::Note*)note)->onControl(param, value); return 0; }                                               \
+        catch (...) { return 1; }                                                                                           \
+    }                                                                                                                       \
+                                                                                                                            \
+    INT_FUNCTION noteOnPreset(void* note, int param, float value) {                                                         \
+        try { ((MiniPlugin::Note*)note)->onPreset(param); return 0; }                                                       \
+        catch (...) { return 1; }                                                                                           \
+    }                                                                                                                       \
+                                                                                                                            \
     INT_FUNCTION noteProcess(void* note, float** outputBuffers, int numSamples, bool* shouldContinue = NULL) {              \
         try { bool bContinue = ((MiniPlugin::Note*)note)->process(outputBuffers, 2, numSamples);                            \
               if(shouldContinue) *shouldContinue = bContinue;                                                               \
@@ -138,12 +159,21 @@ extern "C" {                                                                    
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \
                                                                                                                             \
+    INT_FUNCTION synthOnControl(void* synth, int param, float value) {                                                      \
+        try { ((MiniPlugin::Synth*)synth)->onControl(param, value); return 0; }                                             \
+        catch (...) { return 1; }                                                                                           \
+    }                                                                                                                       \
+                                                                                                                            \
+    INT_FUNCTION synthOnPreset(void* synth, int param, float value) {                                                       \
+        try { ((MiniPlugin::Synth*)synth)->onPreset(param); return 0; }                                                     \
+        catch (...) { return 1; }                                                                                           \
+    }                                                                                                                       \
+                                                                                                                            \
     INT_FUNCTION synthProcess(void* synth, const float** inputBuffers, float** outputBuffers, int numSamples) {             \
         try { ((MiniPlugin::Synth*)synth)->process(inputBuffers, outputBuffers, numSamples); return 0;                      \
         } catch(...) { return 1; }                                                                                          \
     }                                                                                                                       \
 }
-
 #endif
 
 namespace DSP {
@@ -317,6 +347,21 @@ namespace MiniPlugin
             items[count++].value = initial;
         }
 
+        void add(const char* name, Parameter::Type type, std::initializer_list<const char*> options, Parameter::Size size = AUTO_SIZE) {
+            items[count].name = name;
+            items[count].type = type;
+            items[count].min = 0.f;
+            items[count].max = (float)options.size() - 1;
+            items[count].initial = 0;
+            auto option = options.begin();
+            while (option != options.end()) {
+                items[count].options.add(Caption::from(*option));
+                option++;
+            }
+            items[count].size = size;
+            items[count++].value = 0;
+        }
+
         bool changed() {
             bool changed = false;
             for (unsigned int c = 0; c < count; c++) {
@@ -397,11 +442,16 @@ namespace MiniPlugin
     class Effect
     {
     public:
-        Effect() { }
-        virtual ~Effect() { }
+        //Effect() { }
+        //virtual ~Effect() { }
         
         virtual void process(const float** inputBuffers, float** outputBuffers, int numSamples) = 0;
         
+        // events
+        virtual void onControl(int param, float value) { };
+        virtual void onPreset(int preset) { };
+
+        // events (DEPRECATED)
         virtual void presetLoaded(int iPresetNum, const char *sPresetName) { };
         virtual void optionChanged(int iOptionMenu, int iItem) { };
         virtual void buttonPressed(int iButton) { };
@@ -471,6 +521,8 @@ namespace MiniPlugin
             
         virtual void onPitchWheel (const int value) { };
         virtual void onControlChange (const int controller, const int value) { };
+        virtual void onControl(int param, float value) { };
+        virtual void onPreset(int preset) { };
             
         virtual bool process (float** outputBuffer, int numChannels, int numSamples) = 0;
                 

@@ -11,12 +11,14 @@
 
 #include PLUGIN_K
 
-extern "C" {                                                                                                                
-
-#define CATCH_ALL(err)                              \
+#define CATCH_ALL                                   \
     catch (...) {                                   \
         throw;                                      \
     }
+
+extern "C" {                                                                                                                
+
+PLUGIN(MiniPlugin::Synth)
 
 PTR_FUNCTION synthCreate(float sampleRate) {                                                                            
     klang::fs = sampleRate;                                                                                             
@@ -30,29 +32,25 @@ PTR_FUNCTION synthCreate(float sampleRate) {
 
 VOID_FUNCTION synthDestroy(void* synth) {                                                                               
     try {
-        delete (MiniPlugin::Synth*)synth;
+        delete (KSynth*)synth;
     } catch (...) { }
 }                                                                                                                       
-                                                                                                                            
-VOID_FUNCTION getBackground(void** data, int* size) {                                                                   
-    *data = (void*)Background::data;                                                                                    
-    *size = Background::size;                                                                                           
-}                                                                                                                       
 
-INT_FUNCTION getDebugData(void* synth, const float** const buffer, int* size, void** graph, void** console) {
-    try {
-        if (buffer) *size = ((MiniPlugin::Synth*)synth)->getDebugAudio(buffer);
-        if (graph) ((MiniPlugin::Synth*)synth)->getDebugGraph(graph);
-        if (console) ((MiniPlugin::Synth*)synth)->getDebugConsole(console);
-        return 0;                                                       
-    } catch (...) { return 1; }                                         
+INT_FUNCTION synthOnControl(void* synth, int param, float value) {
+    try { ((MiniPlugin::Synth*)synth)->onControl(param, value); return 0; }
+    catch (...) { return 1; }
 }
-                                                                                                                           
+
+INT_FUNCTION synthOnPreset(void* synth, int param) {
+    try { ((MiniPlugin::Synth*)synth)->onPreset(param); return 0; }
+    catch (...) { return 1; }
+}
+                                                                                                                                                                                                                                                      
 INT_FUNCTION noteOnStart(void* note, int pitch, float velocity){                                                                
     try { 
         ((MiniPlugin::Note*)note)->onStartNote(pitch, velocity);
         return 0;
-    } CATCH_ALL(1)
+    } CATCH_ALL
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION noteOnStop(void* note, float velocity, bool* hasRelease = NULL){                                           
@@ -60,38 +58,46 @@ INT_FUNCTION noteOnStop(void* note, float velocity, bool* hasRelease = NULL){
         bool terminate = ((MiniPlugin::Note*)note)->onStopNote(velocity);
         if (hasRelease) *hasRelease = !terminate;                                                                     
         return 0;                                                                                                     
-    } CATCH_ALL(1)
+    } CATCH_ALL
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION noteOnPitchWheel(void* note, int value){                                                                   
     try { 
         ((MiniPlugin::Note*)note)->onPitchWheel(value);
         return 0;                                                           
-    } CATCH_ALL(1)
+    } CATCH_ALL
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION noteOnControlChange(void* note, int controller, int value){                                                
     try { 
         ((MiniPlugin::Note*)note)->onControlChange(controller, value);
         return 0;                                            
-    } CATCH_ALL(1)
-}                                                                                                                       
+    } CATCH_ALL
+}           
+
+INT_FUNCTION noteOnControl(void* note, int param, float value) {
+    try { ((MiniPlugin::Note*)note)->onControl(param, value); return 0; }
+    catch (...) { return 1; }
+}
+
+INT_FUNCTION noteOnPreset(void* note, int param) {
+    try { ((MiniPlugin::Note*)note)->onPreset(param); return 0; }
+    catch (...) { return 1; }
+}
 
 INT_FUNCTION noteProcess(void* note, float** outputBuffers, int numSamples, bool* shouldContinue = NULL) {
     try {
         bool bContinue = ((MiniPlugin::Note*)note)->process(outputBuffers, 2, numSamples);
         if(shouldContinue) *shouldContinue = bContinue;                                                               
         return 0;                                                                                                     
-    } CATCH_ALL(1)
+    } CATCH_ALL
 }                                                                                                                       
                                                                                                                             
 INT_FUNCTION synthProcess(void* synth, const float** inputBuffers, float** outputBuffers, int numSamples) {             
     try { 
         ((MiniPlugin::Synth*)synth)->process(inputBuffers, outputBuffers, numSamples);
         return 0;                            
-    } catch (...) {
-        return 1;
-    }
+    } CATCH_ALL
 }
 
 };

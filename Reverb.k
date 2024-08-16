@@ -47,7 +47,7 @@ struct Reverb : Stereo::Effect {
 					
 				//times.add(time * fs);  // (convert to samples)
 				//gains.add(random(0.f,1.f) > 0.5 ? gain : -gain);			
-				debug.print("%f @ %f\n", times[r] * 1000.f/fs.f, gains[r].l.value);
+				//debug.print("%f @ %f\n", times[r] * 1000.f/fs.f, gains[r].l.value);
 			}		
 		}
 		

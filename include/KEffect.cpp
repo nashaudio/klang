@@ -11,38 +11,41 @@
 
 #include PLUGIN_K
 
-extern "C" {                                                                                                                
+#define CATCH_ALL                                   \
+    catch (...) {                                   \
+        throw;                                      \
+    }
+
+extern "C" {
+    PLUGIN(MiniPlugin::Effect)
+
     PTR_FUNCTION effectCreate(float sampleRate) {                                                                           
         try {
             klang::fs = sampleRate;
             //::stk::Stk::setSampleRate(sampleRate);
-            return (MiniPlugin::Effect*)new KEffect(new PLUGIN_NAME());
+            return dynamic_cast<MiniPlugin::Effect*>(new KEffect(new PLUGIN_NAME()));
         } catch(...) {
 			return nullptr;
 		}
     }
-                                                                                                                            
-    VOID_FUNCTION getBackground(void** data, int* size) {                                                                   
-        *data = (void*)Background::data;                                                                                    
-        *size = Background::size;                                                                                           
-    }                                                                                                                       
 
-    INT_FUNCTION getDebugData(void* effect, const float** const buffer, int* size, void** graph, void** console) {
-        try {
-            if (buffer) *size = ((MiniPlugin::Effect*)effect)->getDebugAudio(buffer);
-            if (graph) ((MiniPlugin::Effect*)effect)->getDebugGraph(graph);
-            if (console) ((MiniPlugin::Effect*)effect)->getDebugConsole(console);
-            return 0;
-        } catch (...) { return 1; }
+    VOID_FUNCTION effectDestroy(void* effect) {
+        try { delete (KEffect*)effect; }
+        catch (...) { }
+    }
+
+    INT_FUNCTION effectOnControl(void* effect, int param, float value) {                                                    
+        try { ((MiniPlugin::Effect*)effect)->onControl(param, value); return 0; }                                           
+        catch (...) { return 1; }                                                                                           
+    }                                                                                                                       
+                                                                                                                            
+    INT_FUNCTION effectOnPreset(void* effect, int param) {                                                                  
+        try { ((MiniPlugin::Effect*)effect)->onPreset(param); return 0; }                                                   
+        catch (...) { return 1; }                                                                                           
     }
                                                                                                                             
-    VOID_FUNCTION effectDestroy(void* effect) {                                                                             
-        try { delete (MiniPlugin::Effect*)effect; }
-		catch(...) { }
-    }                                                                                                                       
-                                                                                                                            
     INT_FUNCTION effectProcess(void* effect, const float** inputBuffers, float** outputBuffers, int numSamples) {           
-        try { ((MiniPlugin::Effect*)effect)->process(inputBuffers, outputBuffers, numSamples); return 0;
-        } catch(...) { return 1; }                                                                                          
+        try { ((KEffect*)effect)->process(inputBuffers, outputBuffers, numSamples); return 0;
+        } CATCH_ALL
     }                                                                                                                       
 }

@@ -7,7 +7,7 @@
 
 #include "plugin.h"
 //#include "dsp.h"
-#include "klang.h"
+//#include "klang.h"
 
 #pragma once
 
@@ -20,10 +20,10 @@ public:
         presets = effect->presets;
     }
 
-    void setSampleRate(float sampleRate){ klang::fs = sampleRate; }
-    float getSampleRate() const { return klang::fs; };
+    void setSampleRate(float sampleRate) override { klang::fs = sampleRate; }
+    float getSampleRate() const override { return klang::fs; };
     
-    void process(const float** inputBuffers, float** outputBuffers, int numSamples) { 
+    void process(const float** inputBuffers, float** outputBuffers, int numSamples) override { 
         // copy input to output for in-place/replacing processing
         memcpy(outputBuffers[0], inputBuffers[0], numSamples * sizeof(float));
         memcpy(outputBuffers[1], inputBuffers[1], numSamples * sizeof(float));
@@ -64,10 +64,24 @@ public:
                 parameters[p].set(effect.control(p));
         }
     }
-    
-    void presetLoaded(int iPresetNum, const char *sPresetName) { }
-    void optionChanged(int iOptionMenu, int iItem) { }
-    void buttonPressed(int iButton) { }
+
+    void onControl(int parameter, float value) override {
+        if (effect) {
+            if(effect.isMono())
+                effect.mono->onControl(parameter, value);
+            else
+                effect.stereo->onControl(parameter, value);
+        }
+	}
+
+    void onPreset(int preset) override {
+		if (effect) {
+			if(effect.isMono())
+				effect.mono->onPreset(preset);
+			else
+				effect.stereo->onPreset(preset);
+		}
+	}
 
 private:
     struct Effect {

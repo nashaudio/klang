@@ -33,6 +33,12 @@ static inline float _abs(float x) { return __builtin_fabsf(x); }
 #define FABS ::fabsf
 #endif
 
+#if defined(DEBUG) || defined(_DEBUG)
+	#define KLANG_DEBUG 1
+#else
+	#define KLANG_DEBUG 0
+#endif
+
 // provide access to original math functions through std:: prefix
 namespace std {
 	namespace klang {
@@ -52,6 +58,11 @@ namespace std {
 	static_assert(std::is_trivially_move_constructible_v<type>, "signal is not trivially copy assignable");	
 
 namespace klang {
+	struct Version { 
+		unsigned char major, minor, build, extra; 
+		bool isDebug() const { return extra & 1; } }
+	static constexpr version = { 0, 7, 0, KLANG_DEBUG }; 
+
 	enum Mode { Peak, RMS, Mean };
 
 	//template<typename Base, typename Derived>
@@ -189,8 +200,8 @@ namespace klang {
 	constexpr constant root2 = { 1.4142135623730950488016887242097 };
 
 	template<typename TYPE>
-	static TYPE random(const TYPE min, const TYPE max) { return rand() * ((max - min) / (TYPE)RAND_MAX) + min; }
-	static void random(const unsigned int seed) { srand(seed); }
+	inline static TYPE random(const TYPE min, const TYPE max) { return rand() * ((max - min) / (TYPE)RAND_MAX) + min; }
+	inline static void random(const unsigned int seed) { srand(seed); }
 
 	//static float sin(float phase) { return sinf(phase); }
 
@@ -1028,12 +1039,12 @@ namespace klang {
 		const int size;
 
 		buffer(float* buffer, int size)
-		: samples(buffer), size(size), owned(false) { 
+		: owned(false), samples(buffer), size(size) {
 			rewind();
 		}
 
 		buffer(float* buffer, int size, float initial)
-		: samples(buffer), size(size), owned(false) {
+		: owned(false), samples(buffer), size(size) {
 			rewind();
 			set(initial);
 		}
@@ -2536,11 +2547,19 @@ namespace klang {
 		return carrier;
 	}
 
-	struct Plugin {
-		virtual ~Plugin() { }
+	struct Controller {
+	protected:
+		virtual event control(int index, float value) { };
+		virtual event preset(int index) { };
+		virtual event midi(int status, int byte1, int byte2) { };
+	public:
+		virtual void onControl(int index, float value) { control(index, value); };
+		virtual void onPreset(int index) { preset(index); };
+		virtual void onMIDI(int status, int byte1, int byte2) { midi(status, byte1, byte2); }
+	};
 
-		virtual void onParameter(int index, float value) { };
-		virtual void onPreset(int index) { };
+	struct Plugin : public Controller {
+		virtual ~Plugin() { }
 
 		Controls controls;
 		Presets presets;
@@ -2563,7 +2582,7 @@ namespace klang {
 	};
 
 	template<class SYNTH>
-	class NoteBase {
+	class NoteBase : public Controller {
 		SYNTH* synth;
 
 		class Controls {
@@ -2578,7 +2597,6 @@ namespace klang {
 	protected:
 		virtual event on(Pitch p, Velocity v) { }
 		virtual event off(Velocity v = 0) { stage = Off; }
-		virtual event control(int controller, int value) { };
 
 		SYNTH* getSynth() { return synth; }
 	public:
@@ -2626,7 +2644,7 @@ namespace klang {
 
 		enum Stage { Onset, Sustain, Release, Off } stage = Off;
 
-		virtual void controlChange(int controller, int value) { control(controller, value); };
+		virtual void controlChange(int controller, int value) { midi(0xB0, controller, value); };
 	};
 
 	struct Synth;
@@ -2723,19 +2741,33 @@ namespace klang {
 		Synth() : notes(this) { }
 		virtual ~Synth() { }
 
-		virtual void presetLoaded(int preset) { }
-		virtual void optionChanged(int param, int item) { }
-		virtual void buttonPressed(int param) { };
+		//virtual void presetLoaded(int preset) { }
+		//virtual void optionChanged(int param, int item) { }
+		//virtual void buttonPressed(int param) { };
 
 		int indexOf(Note* note) const {
 			int index = 0;
 			for (const auto* n : notes.items) {
-				if (note == n) return 
-					index;
+				if (note == n) 
+					return index;
 				index++;
 			}
 			return -1; // not found
 		}
+
+		// pass to synth and notes
+		virtual event onControl(int index, float value) override { 
+			control(index, value);
+			for (unsigned int n = 0; n < notes.count; n++)
+				notes[n]->onControl(index, value);
+		};
+
+		// pass to synth and notes
+		virtual event onPreset(int index) override {
+			preset(index);
+			for (unsigned int n = 0; n < notes.count; n++)
+				notes[n]->onPreset(index);
+		};
 	};
 
 	template<class SYNTH, class NOTE>
