@@ -1881,12 +1881,12 @@ namespace klang {
 		}
 
 		template<typename TYPE>
-		void add(TYPE y) { data[0].add(y); }
-		void add(const Point pt) { data[0].add(pt); }
+		void add(TYPE y) { data[0].add(y); dirty = true; }
+		void add(const Point pt) { data[0].add(pt); dirty = true; }
 
 		template<typename TYPE>
-		Graph& operator+=(TYPE y) { data[0].add(y); return *this; }
-		Graph& operator+=(const Point pt) { data[0].add(pt); return *this; }
+		Graph& operator+=(TYPE y) { add(y); return *this; }
+		Graph& operator+=(const Point pt) { add(pt); return *this; }
 
 		template<typename TYPE>
 		Graph& operator=(TYPE(*function)(TYPE)) {
@@ -1966,7 +1966,7 @@ namespace klang {
 		return series;
 	}
 
-	static Graph graph;
+	THREAD_LOCAL static Graph graph;
 
 	template<int SIZE>
 	struct Delay : public Modifier {
