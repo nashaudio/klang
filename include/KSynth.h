@@ -21,6 +21,11 @@ public:
         Note(MiniPlugin::Synth* synth, typename SYNTH::Note* note) : MiniPlugin::Note(synth), note(note) {
             parameters = synth->parameters;
             presets = synth->presets;
+
+            if (klang::graph.isActive())
+                debug.graph = &klang::graph;
+            if (klang::debug.console.length)
+                debug.console = &klang::debug.console;
         }     
         ~Note() { delete note; } // destructor (clean up, free memory, etc.)
 
@@ -105,6 +110,11 @@ public:
 
         parameters = *(klang::Controls*)&synth->controls;
         presets = *(MiniPlugin::Presets*)&synth->presets;
+
+        if (klang::graph.isActive())
+            debug.graph = &klang::graph;
+        if (klang::debug.console.length)
+            debug.console = &klang::debug.console;
     }
 
     void setSampleRate(float sampleRate){ klang::fs = sampleRate; }

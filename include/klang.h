@@ -26,14 +26,14 @@ static inline float _abs(float x) { return __builtin_fabsf(x); }
 #define ABS _abs
 #define FABS _abs
 #endif
-#if __APPLE
+#ifdef __APPLE__
 #define THREAD_LOCAL
 #define SQRT ::sqrt
 #define SQRTF ::sqrtf
 #define ABS ::abs
 #define FABS ::fabsf
 #endif
-#ifdef WIN32
+#if defined(__WIN32__) || defined(WIN32)
 #define THREAD_LOCAL thread_local
 #define SQRT ::sqrt
 #define SQRTF ::sqrtf
@@ -1322,27 +1322,91 @@ namespace klang {
 		//	return modifier;
 		//}
 
+		template <typename... Args>
+		using FirstType = typename std::tuple_element<0, std::tuple<Args...>>::type;
+
+		template <typename First, typename... Rest>
+		struct AllButFirst {
+			using type = std::tuple<Rest...>;
+		};
+
+		template <typename First, typename... Rest>
+		using AllButFirstType = typename AllButFirst<First, Rest...>::type;
+
 		// applies a mathematical function to the input signal
 		template<typename SIGNAL, typename... Args>
 		struct Function : public Generic::Modifier<SIGNAL> {
 			using Modifier<SIGNAL>::in;
 			using Modifier<SIGNAL>::out;
 
+			using FirstArg = typename std::tuple_element<0, std::tuple<Args...>>::type;
+			using RestArgs = AllButFirst<Args...>;
+		
 			std::function<float(Args...)> function;
+
+			static constexpr unsigned int args = sizeof...(Args);
+			std::tuple<Args...> inputs;
+
+			// Helper function to extract the tail of a tuple
+			template <typename First, typename... Rest>
+			std::tuple<Rest...> tail(const std::tuple<First, Rest...>& t) {
+				return std::apply(	[](const First&, const Rest&... rest) { return std::make_tuple(rest...); },t);
+			}
 
 			template <typename FunctionType>
 			Function(FunctionType&& function)
 				: function(std::forward<FunctionType>(function)) {}
 
+			inline float operator()(float x) {
+				inputs = std::tuple<Args...>(x, tail(inputs));
+				return std::apply(function, inputs);
+			}
+
 			// Function call operator to invoke the stored callable
-			inline SIGNAL operator()(Args... args) const {
-				return function(std::forward<Args>(args)...);
+			inline SIGNAL operator()(Args... args) {
+				inputs = std::tuple<Args...>(args...);
+				return std::apply(function, inputs);
 			}
 
 			void process() override {
-				out = function(in);
+				if constexpr (args > 1)
+					out = std::apply(function, inputs);
+				else
+					out = function(in);
 			}
 		};
+
+		//// applies a mathematical function to the input signal
+		//template<typename SIGNAL, typename Arg1, typename Arg2>
+		//struct Function2 : public Generic::Modifier<SIGNAL> {
+		//	using Modifier<SIGNAL>::in;
+		//	using Modifier<SIGNAL>::out;
+
+		//	//using FirstArg = typename std::tuple_element<0, std::tuple<Args...>>::type;
+		//	//using RestArgs = AllButFirst<Args...>;
+		//	//
+		//	std::function<float(Arg1, Arg2)> function;
+
+		//	template <typename FunctionType>
+		//	Function2(FunctionType&& function)
+		//		: function(std::forward<FunctionType>(function)) {}
+
+		//	// Function call operator to invoke the stored callable
+		//	template<typename... Args>
+		//	inline SIGNAL operator()(Args... args) const {
+		//		return function(std::forward<Args>(args)...);
+		//	}
+
+		//	//// Bind all but the first float argument
+		//	//template<typename... RestArgs>
+		//	//std::function<float(FirstArg)> bind_except_first(RestArgs... args) const {
+		//	//	return [this, args...](FirstArg x) { return function(x, args...); };
+		//	//}
+
+		//	void process() override {
+		//		out = function(in);
+		//	}
+		//};
 
 		template<typename SIGNAL>
 		struct Oscillator : public Generator<SIGNAL> {
@@ -1757,6 +1821,19 @@ namespace klang {
 				add({ (double)Array::size(), y });
 			}
 
+			void plot(Function<float>& f, const Axis& x_axis) {
+				if (function != (void*)&f) {
+					clear();
+					function = (void*)&f;
+					double x = 0;
+					const double dx = x_axis.range() / GRAPH_SIZE;
+					for (int i = 0; i <= GRAPH_SIZE; i++) {
+						x = x_axis.min + i * dx;
+						add({ x, (double)f((float)x) });
+					}
+				}
+			}
+
 			template<class TYPE>
 			void plot(TYPE f, const Axis& x_axis) {
 				if (function != (void*)f) {
@@ -1766,7 +1843,7 @@ namespace klang {
 					const double dx = x_axis.range() / GRAPH_SIZE;
 					for (int i = 0; i <= GRAPH_SIZE; i++) {
 						x = x_axis.min + i * dx;
-						add({ x, (double)f(x) });
+						add({ x, (double)f((float)x) });
 					}
 				}
 			}
@@ -1875,6 +1952,18 @@ namespace klang {
 			return data[0];
 		}
 
+		void plot(Function<float>& function) {
+			Graph::Series* series = Graph::data.find((void*)&function);
+			if (!series)
+				series = Graph::data.add();
+			if (series) {
+				dirty = true;
+				if (!axes.x.valid())
+					axes.x = { -1, 1 };
+				series->plot(function, axes.x);
+			}
+		}
+
 		template<class TYPE>
 		void plot(TYPE function) {
 			Graph::Series* series = Graph::data.find((void*)function);
@@ -1956,6 +2045,11 @@ namespace klang {
 		Data data;
 		bool dirty = false;
 	};
+
+	static Graph& operator>>(Function<float>& function, Graph& graph) {
+		graph.plot(function);
+		return graph;
+	}
 
 	template<typename TYPE>
 	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {

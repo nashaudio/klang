@@ -18,6 +18,11 @@ public:
     KEffect(TYPE* effect) : effect(effect) {
         parameters = effect->controls;
         presets = effect->presets;
+
+        if (klang::graph.isActive())
+            debug.graph = &klang::graph;
+        if (klang::debug.console.length)
+            debug.console = &klang::debug.console;
     }
 
     void setSampleRate(float sampleRate) override { klang::fs = sampleRate; }
