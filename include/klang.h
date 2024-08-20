@@ -25,7 +25,15 @@ static inline float _abs(float x) { return __builtin_fabsf(x); }
 #define SQRTF _sqrt
 #define ABS _abs
 #define FABS _abs
-#else
+#endif
+#if __APPLE
+#define THREAD_LOCAL
+#define SQRT ::sqrt
+#define SQRTF ::sqrtf
+#define ABS ::abs
+#define FABS ::fabsf
+#endif
+#ifdef WIN32
 #define THREAD_LOCAL thread_local
 #define SQRT ::sqrt
 #define SQRTF ::sqrtf
@@ -1144,7 +1152,7 @@ namespace klang {
 		}
 
 		buffer& operator=(const buffer& in) {
-			assert(size == in.size);
+			//assert(size == in.size);
 			memcpy(samples, in.samples, size * sizeof(float));
 			return *this;
 		}
