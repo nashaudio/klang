@@ -33,13 +33,10 @@ struct Shaping : Effect {
 	void process() {
 		param distort = controls[0];
 		
-		float x = 5.6f;
-		Function<float, float> function(softclip);
-		auto f = function.bind_except_first(x);// >> graph;
-		//auto f_ptr = f.target<float(*)(float)>();
-		//*f_ptr >> graph;
-		//graph.plot(f_ptr);
+		hardclip >> graph;
+		Function f(softclip);
+		f.with(distort) >> graph;
 			
-		softclip(in, distort) >> out;
+		in >> f(distort) >> out;
 	}
 };

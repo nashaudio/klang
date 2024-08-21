@@ -1165,6 +1165,8 @@ namespace klang {
 		const float* data() const { return samples; }
 	};
 
+    struct Graph;
+
 	namespace Generic {
 		template<typename SIGNAL>
 		struct Input {
@@ -1322,92 +1324,122 @@ namespace klang {
 		//	return modifier;
 		//}
 
-		template <typename... Args>
-		using FirstType = typename std::tuple_element<0, std::tuple<Args...>>::type;
-
-		template <typename First, typename... Rest>
-		struct AllButFirst {
-			using type = std::tuple<Rest...>;
-		};
-
-		template <typename First, typename... Rest>
-		using AllButFirstType = typename AllButFirst<First, Rest...>::type;
+//		template <typename... Args>
+//		using FirstType = typename std::tuple_element<0, std::tuple<Args...>>::type;
+//
+//		template <typename First, typename... Rest>
+//		struct AllButFirst {
+//			using type = std::tuple<Rest...>;
+//		};
+//
+//		template <typename First, typename... Rest>
+//		using AllButFirstType = typename AllButFirst<First, Rest...>::type;
+//
 
 		// applies a mathematical function to the input signal
 		template<typename SIGNAL, typename... Args>
 		struct Function : public Generic::Modifier<SIGNAL> {
+            virtual ~Function() { }
+            
 			using Modifier<SIGNAL>::in;
 			using Modifier<SIGNAL>::out;
+            
+            // Helper to combine hash values
+            template <typename T>
+            inline void hash_combine(std::size_t& seed, const T& value) const {
+                std::hash<T> hasher;
+                seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+            }
 
-			using FirstArg = typename std::tuple_element<0, std::tuple<Args...>>::type;
-			using RestArgs = AllButFirst<Args...>;
+            // Recursive function to hash each element of a tuple
+            template <typename Tuple, std::size_t Index = 0>
+            std::size_t hash_tuple(const Tuple& tuple) const {
+                if constexpr (Index < std::tuple_size<Tuple>::value) {
+                    std::size_t seed = hash_tuple<Tuple, Index + 1>(tuple);
+                    hash_combine(seed, std::get<Index>(tuple));
+                    return seed;
+                } else {
+                    return 0;
+                }
+            }
+            
+            operator void*() { return this; }
+            uint64_t hash() const { return hash_tuple(tail(inputs)); }
 		
 			std::function<float(Args...)> function;
 
-			static constexpr unsigned int args = sizeof...(Args);
+			static constexpr unsigned int ARGS = sizeof...(Args);
+            unsigned int args() const { return ARGS; }
+            
 			std::tuple<Args...> inputs;
 
 			// Helper function to extract the tail of a tuple
 			template <typename First, typename... Rest>
-			std::tuple<Rest...> tail(const std::tuple<First, Rest...>& t) {
-				return std::apply(	[](const First&, const Rest&... rest) { return std::make_tuple(rest...); },t);
+			std::tuple<Rest...> tail(const std::tuple<First, Rest...>& t) const {
+				return std::apply( [](const First&, const Rest&... rest) { return std::make_tuple(rest...); },t);
 			}
-
-			template <typename FunctionType>
-			Function(FunctionType&& function)
-				: function(std::forward<FunctionType>(function)) {}
-
-			inline float operator()(float x) {
-				inputs = std::tuple<Args...>(x, tail(inputs));
-				return std::apply(function, inputs);
-			}
+            
+            template<typename FunctionPtr>
+			Function(FunctionPtr function)
+				: function(std::forward<FunctionPtr>(function)) {}
+            
+            template<typename FunctionPtr, typename... OtherArgs>
+            Function(FunctionPtr function, OtherArgs... args)
+                : function(std::forward<FunctionPtr>(function)) {
+                    with(args...);
+                }
+            
+            void input() override {
+                std::get<0>(inputs) = in.value;
+            }
+            
+            // get the first argument
+            template <typename First, typename... Rest>
+            First first(First first, Rest...) { return first; }
 
 			// Function call operator to invoke the stored callable
-			inline SIGNAL operator()(Args... args) {
-				inputs = std::tuple<Args...>(args...);
-				return std::apply(function, inputs);
+            template<typename... FuncArgs>
+			Function<SIGNAL,Args...>& operator()(const FuncArgs&... args) {
+                if constexpr (ARGS > 1 && sizeof...(FuncArgs) == 1){
+                    in = first(args...);
+                    std::get<0>(inputs) = in.value;
+                    return *this;
+                } else if constexpr (ARGS == sizeof...(FuncArgs)){
+                    in = first(args...);
+                    inputs = std::tuple<Args...>(args...);
+                    return *this;
+                } else if constexpr (sizeof...(FuncArgs) == (ARGS - 1)){
+                    inputs = std::tuple<Args...>(in.value, args...);
+                    return *this;
+                } else {
+                    in = first(args...);
+                    std::get<0>(inputs) = in.value;
+                    return *this;
+                }
 			}
+            
+            template<typename... FuncArgs>
+            Function<SIGNAL,Args...>& with(FuncArgs... args){
+                static_assert(sizeof...(FuncArgs) == (ARGS - 1), "with() arguments must have all but first argument.");
+                inputs = std::tuple<Args...>(in.value, args...);
+                    
+                return *this;
+            }
 
 			void process() override {
-				if constexpr (args > 1)
-					out = std::apply(function, inputs);
-				else
-					out = function(in);
+                if constexpr (ARGS > 1)
+                    out = std::apply(function, inputs);
+                else
+                    out = function(in);
 			}
-		};
-
-		//// applies a mathematical function to the input signal
-		//template<typename SIGNAL, typename Arg1, typename Arg2>
-		//struct Function2 : public Generic::Modifier<SIGNAL> {
-		//	using Modifier<SIGNAL>::in;
-		//	using Modifier<SIGNAL>::out;
-
-		//	//using FirstArg = typename std::tuple_element<0, std::tuple<Args...>>::type;
-		//	//using RestArgs = AllButFirst<Args...>;
-		//	//
-		//	std::function<float(Arg1, Arg2)> function;
-
-		//	template <typename FunctionType>
-		//	Function2(FunctionType&& function)
-		//		: function(std::forward<FunctionType>(function)) {}
-
-		//	// Function call operator to invoke the stored callable
-		//	template<typename... Args>
-		//	inline SIGNAL operator()(Args... args) const {
-		//		return function(std::forward<Args>(args)...);
-		//	}
-
-		//	//// Bind all but the first float argument
-		//	//template<typename... RestArgs>
-		//	//std::function<float(FirstArg)> bind_except_first(RestArgs... args) const {
-		//	//	return [this, args...](FirstArg x) { return function(x, args...); };
-		//	//}
-
-		//	void process() override {
-		//		out = function(in);
-		//	}
-		//};
-
+            
+            Graph& operator>>(Graph& graph);
+        };
+    
+        // deduction guide for functions
+        template <typename... Args>
+        Function(float(*)(Args...)) -> Function<signal, Args...>;
+    
 		template<typename SIGNAL>
 		struct Oscillator : public Generator<SIGNAL> {
 		protected:
@@ -1482,6 +1514,10 @@ namespace klang {
 	struct Function : public Generic::Function<signal, Args...> { 
 		Function(std::function<float(Args...)> function) : Generic::Function<signal, Args...>(function) { }
 	};
+
+    // deduction guide for functions
+    template <typename... Args>
+    Function(float(*)(Args...)) -> Function<Args...>;
 
 	// syntax equivalence: a = b is the same as b >> a
 	inline signal& signal::operator=(Output& b) { 
@@ -1806,7 +1842,9 @@ namespace klang {
 		}
 	};
 
-	struct Graph : Input {
+	struct Graph {
+        virtual ~Graph() { };
+        
 		struct Point {
 			double x, y;
 			bool valid() const { return !isnan(x) && !isinf(x) && !isnan(y); } // NB: y can be +/- inf
@@ -1815,39 +1853,46 @@ namespace klang {
 		struct Axis;
 
 		struct Series : public Array<Point, GRAPH_SIZE + 1>, Input {
+            virtual ~Series() { }
+            
 			void* function = nullptr;
+            uint64_t hash = 0;
+            
 			using Array::add;
 			void add(double y) {
 				add({ (double)Array::size(), y });
 			}
 
-			void plot(Function<float>& f, const Axis& x_axis) {
-				if (function != (void*)&f) {
+            template<typename SIGNAL, typename... Args>
+			void plot(Generic::Function<SIGNAL, Args...>& f, const Axis& x_axis) {
+				if (function != (void*)f || hash != f.hash()) {
 					clear();
-					function = (void*)&f;
+					function = (void*)f;
+                    hash = f.hash();
 					double x = 0;
 					const double dx = x_axis.range() / GRAPH_SIZE;
 					for (int i = 0; i <= GRAPH_SIZE; i++) {
 						x = x_axis.min + i * dx;
-						add({ x, (double)f((float)x) });
+						add({ x, (double)(signal)f(x) });
 					}
 				}
 			}
 
-			template<class TYPE>
-			void plot(TYPE f, const Axis& x_axis) {
+			template<typename RETURN, typename ARG>
+			void plot(RETURN(*f)(ARG), const Axis& x_axis) {
 				if (function != (void*)f) {
 					clear();
 					function = (void*)f;
+                    hash = 0;
 					double x = 0;
 					const double dx = x_axis.range() / GRAPH_SIZE;
 					for (int i = 0; i <= GRAPH_SIZE; i++) {
 						x = x_axis.min + i * dx;
-						add({ x, (double)f((float)x) });
+						add({ x, (double)(signal)f((float)x) });
 					}
 				}
 			}
-
+            
 			bool operator==(const Series& in) const {
 				if (count != in.count) return false;
 				for (unsigned int i = 0; i < count; i++)
@@ -1859,6 +1904,11 @@ namespace klang {
 			bool operator!=(const Series& in) const {
 				return !operator==(in);
 			}
+            
+            void clear() {
+                function = nullptr;
+                Array::clear();
+            }
 
 			using Input::input;
 			void input() override {
@@ -1952,20 +2002,8 @@ namespace klang {
 			return data[0];
 		}
 
-		void plot(Function<float>& function) {
-			Graph::Series* series = Graph::data.find((void*)&function);
-			if (!series)
-				series = Graph::data.add();
-			if (series) {
-				dirty = true;
-				if (!axes.x.valid())
-					axes.x = { -1, 1 };
-				series->plot(function, axes.x);
-			}
-		}
-
-		template<class TYPE>
-		void plot(TYPE function) {
+        template<typename SIGNAL, typename... Args>
+		void plot(Generic::Function<SIGNAL,Args...>& function) {
 			Graph::Series* series = Graph::data.find((void*)function);
 			if (!series)
 				series = Graph::data.add();
@@ -1976,6 +2014,33 @@ namespace klang {
 				series->plot(function, axes.x);
 			}
 		}
+        
+		template<typename TYPE>
+		void plot(TYPE(*function)(TYPE)) {
+			Graph::Series* series = Graph::data.find((void*)function);
+			if (!series)
+				series = Graph::data.add();
+			if (series) {
+				dirty = true;
+				if (!axes.x.valid())
+					axes.x = { -1, 1 };
+				series->plot(function, axes.x);
+			}
+		}
+        
+        template<typename FUNCTION, typename... VALUES>
+        void plot(FUNCTION f, VALUES... values) {
+            thread_local static Function fun(f);
+            Graph::Series* series = Graph::data.find((void*)fun);
+            if (!series)
+                series = Graph::data.add();
+            if (series) {
+                dirty = true;
+                if (!axes.x.valid())
+                    axes.x = { -1, 1 };
+                series->plot(fun.with(values...), axes.x);
+            }
+        }
 
 		template<typename TYPE>
 		void add(TYPE y) { data[0].add(y); dirty = true; }
@@ -2000,11 +2065,14 @@ namespace klang {
 				add(value);
 			return *this;
 		}
-
-		using Input::input;
-		void input() override {
-			add(in);
-		}
+        
+        template<typename... Args> Graph& operator<<(Function<Args...>& function){
+            plot(function.with());
+            return *this;
+        }
+       
+        template<typename TYPE> Graph& operator<<(TYPE& in) { add(in); return *this;  } // with processing
+        template<typename TYPE> Graph& operator<<(const TYPE& in) { add(in); return *this; } // without/after processing
 
 		// returns the user-defined axes
 		const Axes& getAxes() const { return axes; }
@@ -2046,22 +2114,17 @@ namespace klang {
 		bool dirty = false;
 	};
 
-	static Graph& operator>>(Function<float>& function, Graph& graph) {
-		graph.plot(function);
-		return graph;
-	}
+    template<typename SIGNAL, typename... Args>
+    inline Graph& Generic::Function<SIGNAL, Args...>::operator>>(Graph& graph) {
+        graph.plot(*this);
+        return graph;
+    }
 
 	template<typename TYPE>
 	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {
 		graph.plot(function);
 		return graph;
 	}
-
-	//template<typename TYPE>
-	//inline static Graph::Series& operator>>(TYPE y, Graph::Series& series) {
-	//	series.add(y);
-	//	return series;
-	//}
 
 	inline static Graph::Series& operator>>(Graph::Point pt, Graph::Series& series) {
 		series.add(pt);
@@ -3163,7 +3226,7 @@ namespace klang {
 	// pass source to destination (with source processing)
 	template<typename SOURCE, typename DESTINATION>
 	inline DESTINATION& operator>>(SOURCE& source, DESTINATION& destination) {
-		if constexpr (is_derived_from<Input, DESTINATION>())
+        if constexpr (is_derived_from<Input, DESTINATION>())
 			destination.input(source); // input to destination (enables overriding of <<)
 		else if constexpr (is_derived_from<Stereo::Input, DESTINATION>())
 			destination.input(source); // input to destination (enables overriding of <<)
@@ -3175,7 +3238,7 @@ namespace klang {
 	// pass source to destination (no source processing)
 	template<typename SOURCE, typename DESTINATION>
 	inline DESTINATION& operator>>(const SOURCE& source, DESTINATION& destination) {
-		if constexpr (is_derived_from<Input, DESTINATION>())
+        if constexpr (is_derived_from<Input, DESTINATION>())
 			destination.input(source); // input to destination (enables overriding of <<)
 		else if constexpr (is_derived_from<Stereo::Input, DESTINATION>())
 			destination.input(source); // input to destination (enables overriding of <<)
