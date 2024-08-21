@@ -26,17 +26,18 @@ struct Shaping : Effect {
 
 	// Prepare for processing (called once per buffer)
 	void prepare() {
+		param distort = controls[0];
 		
+		hardclip >> graph;
+		Function f(softclip);
+		f.with(distort) >> graph;
 	}
 
 	// Apply processing (called once per sample)
 	void process() {
 		param distort = controls[0];
 		
-		hardclip >> graph;
-		Function f(softclip);
-		f.with(distort) >> graph;
-			
+		Function f(softclip);			
 		in >> f(distort) >> out;
 	}
 };

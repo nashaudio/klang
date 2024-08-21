@@ -47,6 +47,12 @@ static inline float _abs(float x) { return __builtin_fabsf(x); }
 	#define KLANG_DEBUG 0
 #endif
 
+#ifndef GRAPH_SIZE
+#define GRAPH_SIZE 44100
+#endif
+
+#define GRAPH_SERIES 4
+
 // provide access to original math functions through std:: prefix
 namespace std {
 	namespace klang {
@@ -439,7 +445,7 @@ namespace klang {
 		int channels() const { return CHANNELS; }
 
 		const signals& operator<<(const signals& input) {
-			return operator=(input);
+			return this->operator=(input);
 		}
 
 		signals& operator>>(signals& destination) const {
@@ -861,15 +867,20 @@ namespace klang {
 		Control& operator-=(float x) { value -= x; return *this; }
 		Control& operator/=(float x) { value /= x; return *this; }
 
+		//float operator+(float x) const { return value + x; }
+		//float operator*(float x) const { return value * x; }
+		//float operator-(float x) const { return value - x; }
+		//float operator/(float x) const { return value / x; }
+
 		template<typename TYPE> signal operator+(const Control& x) const { return value + x; }
 		template<typename TYPE> signal operator*(const Control& x) const { return value * x; }
 		template<typename TYPE> signal operator-(const Control& x) const { return value - x; }
 		template<typename TYPE> signal operator/(const Control& x) const { return value / x; }
 
-		template<typename TYPE> TYPE operator+(TYPE x) const { return value + x; }
-		template<typename TYPE> TYPE operator*(TYPE x) const { return value * x; }
-		template<typename TYPE> TYPE operator-(TYPE x) const { return value - x; }
-		template<typename TYPE> TYPE operator/(TYPE x) const { return value / x; }
+		template<typename TYPE> float operator+(TYPE x) const { return value + x; }
+		template<typename TYPE> float operator*(TYPE x) const { return value * x; }
+		template<typename TYPE> float operator-(TYPE x) const { return value - x; }
+		template<typename TYPE> float operator/(TYPE x) const { return value / x; }
 
 		template<typename TYPE> Control& operator<<(TYPE& in) { value = in; return *this;  }		// assign to control with processing
 		template<typename TYPE> Control& operator<<(const TYPE& in) { value = in; return *this;  }	// assign to control without/after processing
@@ -1168,6 +1179,7 @@ namespace klang {
     struct Graph;
 
 	namespace Generic {
+
 		template<typename SIGNAL>
 		struct Input {
 			SIGNAL in = { 0.f };
@@ -1303,39 +1315,6 @@ namespace klang {
 			virtual void set(param, param, param, param, param, param, param, param) { };
 		};
 
-		//// pass signal as input to modifier (allows processing)
-		//template<typename SIGNAL>
-		//inline Modifier<SIGNAL>& operator>>(SIGNAL& input, Modifier<SIGNAL>& modifier) {
-		//	modifier << input;
-		//	return modifier;
-		//}
-
-		//// pass signal as input to modifier (prevents processing)
-		//template<typename SIGNAL>
-		//inline Modifier<SIGNAL>& operator>>(const SIGNAL& input, Modifier<SIGNAL>& modifier) {
-		//	modifier << input;
-		//	return modifier;
-		//}
-
-		//// pass literal / scalar as input to modifier (prevents processing)
-		//template<typename SIGNAL>
-		//inline Modifier<SIGNAL>& operator>>(float input, Modifier<SIGNAL>& modifier) {
-		//	modifier << input;
-		//	return modifier;
-		//}
-
-//		template <typename... Args>
-//		using FirstType = typename std::tuple_element<0, std::tuple<Args...>>::type;
-//
-//		template <typename First, typename... Rest>
-//		struct AllButFirst {
-//			using type = std::tuple<Rest...>;
-//		};
-//
-//		template <typename First, typename... Rest>
-//		using AllButFirstType = typename AllButFirst<First, Rest...>::type;
-//
-
 		// applies a mathematical function to the input signal
 		template<typename SIGNAL, typename... Args>
 		struct Function : public Generic::Modifier<SIGNAL> {
@@ -1343,6 +1322,9 @@ namespace klang {
             
 			using Modifier<SIGNAL>::in;
 			using Modifier<SIGNAL>::out;
+
+			operator SIGNAL() const { return operator()(); };
+			operator param() const { return operator()(); }
             
             // Helper to combine hash values
             template <typename T>
@@ -1417,6 +1399,33 @@ namespace klang {
                     return *this;
                 }
 			}
+
+			// Function call operator to invoke the stored callable
+			template<typename... FuncArgs>
+			const float operator()(const FuncArgs&... args) const {
+				signal in = this->in;
+				std::tuple<Args...> inputs = this->inputs;
+
+				// configure inputs
+				if constexpr (ARGS > 1 && sizeof...(FuncArgs) == 1) {
+					in = first(args...);
+					std::get<0>(inputs) = in.value;
+				} else if constexpr (ARGS == sizeof...(FuncArgs)) {
+					in = first(args...);
+					inputs = std::tuple<Args...>(args...);
+				} else if constexpr (sizeof...(FuncArgs) == (ARGS - 1)) {
+					inputs = std::tuple<Args...>(in.value, args...);
+				} else {
+					in = first(args...);
+					std::get<0>(inputs) = in.value;
+				}
+
+				// return outputs
+				if constexpr (ARGS > 1)
+					return std::apply(function, inputs);
+				else
+					return function(in);
+			}
             
             template<typename... FuncArgs>
             Function<SIGNAL,Args...>& with(FuncArgs... args){
@@ -1433,12 +1442,310 @@ namespace klang {
                     out = function(in);
 			}
             
-            Graph& operator>>(Graph& graph);
+            klang::Graph& operator>>(klang::Graph& graph);
         };
     
         // deduction guide for functions
         template <typename... Args>
         Function(float(*)(Args...)) -> Function<signal, Args...>;
+
+		template<int SIZE>
+		struct Graph {
+			virtual ~Graph() { };
+
+			size_t capacity() const { return SIZE; }
+
+			struct Series;
+
+			struct Point {
+				double x, y;
+				bool valid() const { return !::isnan(x) && !::isinf(x) && !::isnan(y); } // NB: y can be +/- inf
+
+				Series& operator>>(Series& series);
+			};
+
+			struct Axis;
+
+			struct Series : public Array<Point, SIZE + 1>, Input<signal> {
+				virtual ~Series() { }
+
+				void* function = nullptr;
+				uint64_t hash = 0;
+
+				using Array = Array<Point, SIZE + 1>;
+				using Array::add;
+				using Array::count;
+				using Array::items;
+
+				void add(double y) {
+					add({ (double)Array::size(), y });
+				}
+
+				template<typename SIGNAL, typename... Args>
+				void plot(Generic::Function<SIGNAL, Args...>& f, const Axis& x_axis) {
+					if (function != (void*)f || hash != f.hash()) {
+						clear();
+						function = (void*)f;
+						hash = f.hash();
+						double x = 0;
+						const double dx = x_axis.range() / SIZE;
+						for (int i = 0; i <= SIZE; i++) {
+							x = x_axis.min + i * dx;
+							add({ x, (double)(signal)f(x) });
+						}
+					}
+				}
+
+				template<typename RETURN, typename ARG>
+				void plot(RETURN(*f)(ARG), const Axis& x_axis) {
+					if (function != (void*)f) {
+						clear();
+						function = (void*)f;
+						hash = 0;
+						double x = 0;
+						const double dx = x_axis.range() / SIZE;
+						for (int i = 0; i <= SIZE; i++) {
+							x = x_axis.min + i * dx;
+							add({ x, (double)(signal)f((float)x) });
+						}
+					}
+				}
+
+				bool operator==(const Series& in) const {
+					if (count != in.count) return false;
+					for (unsigned int i = 0; i < count; i++)
+						if (items[i].x != in.items[i].x || items[i].y != in.items[i].y)
+							return false;
+					return true;
+				}
+
+				bool operator!=(const Series& in) const {
+					return !operator==(in);
+				}
+
+				void clear() {
+					function = nullptr;
+					Array::clear();
+				}
+
+				using Input::input;
+				void input() override {
+					add(in);
+				}
+			};
+
+			struct Axis {
+				double min = 0, max = 0;
+				bool valid() const { return max != min; }
+				double range() const { return max - min; }
+				bool contains(double value) const { return value >= min && value <= max; }
+				void clear() { min = max = 0; }
+
+				void from(const Series& series, double Point::* axis) {
+					if (!series.count) return;
+					int points = 0;
+					for (unsigned int p = 0; p < series.count; p++) {
+						const Point& pt = series[p];
+						if (pt.valid() && !::isinf(pt.*axis)) {
+							if (!points || pt.*axis < min) min = pt.*axis;
+							if (!points || pt.*axis > max) max = pt.*axis;
+							points++;
+						}
+					}
+					if (std::abs(max) < 0.0000000001) max = 0;
+					if (std::abs(min) < 0.0000000001) min = 0;
+					if (std::abs(max) > 1000000000.0) max = 0;
+					if (std::abs(min) > 1000000000.0) min = 0;
+					if (min > max) max = min = 0;
+				}
+			};
+
+			struct Axes {
+				Axis x, y;
+				bool valid() const { return x.valid() && y.valid(); }
+				void clear() { x = { 0,0 }; y = { 0,0 }; }
+				bool contains(const Point& pt) const { return x.contains(pt.x) && y.contains(pt.y); }
+			};
+
+			void clear() {
+				dirty = true;
+				axes.clear();
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					data[s].clear();
+				data.clear();
+			}
+
+			bool isActive() const {
+				if (data.count)
+					return true;
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					if (data[s].count)
+						return true;
+				return false;
+			}
+
+			struct Data : public Array<Series, GRAPH_SERIES> {
+				using Array<Series, GRAPH_SERIES>::items;
+
+				Series* find(void* function) {
+					for (int s = 0; s < GRAPH_SERIES; s++)
+						if (operator[](s).function == function)
+							return &items[s];
+					return nullptr;
+				}
+			};
+
+			Graph& operator()(double min, double max) {
+				dirty = true;
+				axes.x.min = min; axes.x.max = max;
+				return *this;
+			}
+
+			Graph::Series& operator[](int index) {
+				dirty = true;
+				return data[index];
+			}
+
+			const Graph::Series& operator[](int index) const {
+				return data[index];
+			}
+
+			Graph& operator()(double x_min, double x_max, double y_min, double y_max) {
+				dirty = true;
+				axes.x.min = x_min; axes.x.max = x_max;
+				axes.y.min = y_min; axes.y.max = y_max;
+				return *this;
+			}
+
+			operator Series& () {
+				dirty = true;
+				return data[0];
+			}
+
+			template<typename SIGNAL, typename... Args>
+			void plot(Generic::Function<SIGNAL, Args...>& function) {
+				Graph::Series* series = Graph::data.find((void*)function);
+				if (!series)
+					series = Graph::data.add();
+				if (series) {
+					dirty = true;
+					if (!axes.x.valid())
+						axes.x = { -1, 1 };
+					series->plot(function, axes.x);
+				}
+			}
+
+			template<typename TYPE>
+			void plot(TYPE(*function)(TYPE)) {
+				Graph::Series* series = Graph::data.find((void*)function);
+				if (!series)
+					series = Graph::data.add();
+				if (series) {
+					dirty = true;
+					if (!axes.x.valid())
+						axes.x = { -1, 1 };
+					series->plot(function, axes.x);
+				}
+			}
+
+			template<typename FUNCTION, typename... VALUES>
+			void plot(FUNCTION f, VALUES... values) {
+				thread_local static Function fun(f);
+				Graph::Series* series = Graph::data.find((void*)fun);
+				if (!series)
+					series = Graph::data.add();
+				if (series) {
+					dirty = true;
+					if (!axes.x.valid())
+						axes.x = { -1, 1 };
+					series->plot(fun.with(values...), axes.x);
+				}
+			}
+
+			template<typename TYPE>
+			void add(TYPE y) { data[0].add(y); dirty = true; }
+			void add(const Point pt) { data[0].add(pt); dirty = true; }
+
+			template<typename TYPE>
+			Graph& operator+=(TYPE y) { add(y); return *this; }
+			Graph& operator+=(const Point pt) { add(pt); return *this; }
+
+			template<typename TYPE>
+			Graph& operator=(TYPE(*function)(TYPE)) {
+				plot(function);
+				return *this;
+			}
+
+			Graph& operator=(std::initializer_list<Point> values) {
+				clear(); return operator+=(values);
+			}
+
+			Graph& operator+=(std::initializer_list<Point> values) {
+				for (const auto& value : values)
+					add(value);
+				return *this;
+			}
+
+			template<typename... Args> Graph& operator<<(Function<Args...>& function) {
+				plot(function.with());
+				return *this;
+			}
+
+			template<typename TYPE> Graph& operator<<(TYPE& in) { add(in); return *this; } // with processing
+			template<typename TYPE> Graph& operator<<(const TYPE& in) { add(in); return *this; } // without/after processing
+
+			// returns the user-defined axes
+			const Axes& getAxes() const { return axes; }
+
+			// calculates axes based on data
+			void getAxes(Axes& axes) const {
+				if (!axes.x.valid()) {
+					axes.x.clear();
+					for (int s = 0; s < GRAPH_SERIES; s++)
+						axes.x.from(data[s], &Point::x);
+					if (!axes.y.valid() && axes.y.max != 0)
+						axes.y.min = 0;
+				}
+				if (!axes.y.valid()) {
+					axes.y.clear();
+					for (int s = 0; s < GRAPH_SERIES; s++)
+						axes.y.from(data[s], &Point::y);
+					if (!axes.y.valid() && axes.y.max != 0)
+						axes.y.min = 0;
+				}
+			}
+
+			const Data& getData() const { return data; }
+			bool isDirty() const { return dirty; }
+			void setDirty(bool dirty) { Graph::dirty = dirty; }
+
+			void truncate(unsigned int count) {
+				if (count < data.count)
+					data.count = count;
+
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					if (count < data[s].count)
+						data[s].count = count;
+			}
+
+		protected:
+			Axes axes;
+			Data data;
+			bool dirty = false;
+		};
+
+		template<int SIZE>
+		inline typename Graph<SIZE>::Series& Graph<SIZE>::Point::operator>>(Graph<SIZE>::Series& series) {
+			series.add(*this);
+			return series;
+		}
+
+
+
+		//inline static klang::Graph::Series& operator>>(klang::Graph::Point pt, klang::Graph::Series& series) {
+		//	series.add(pt);
+		//	return series;
+		//}
     
 		template<typename SIGNAL>
 		struct Oscillator : public Generator<SIGNAL> {
@@ -1510,6 +1817,9 @@ namespace klang {
 		}
 	};
 	
+	struct Graph : public Generic::Graph<GRAPH_SIZE> { };
+	THREAD_LOCAL static Graph graph;
+
 	template<typename... Args>
 	struct Function : public Generic::Function<signal, Args...> { 
 		Function(std::function<float(Args...)> function) : Generic::Function<signal, Args...>(function) { }
@@ -1518,6 +1828,18 @@ namespace klang {
     // deduction guide for functions
     template <typename... Args>
     Function(float(*)(Args...)) -> Function<Args...>;
+
+	template<typename SIGNAL, typename... Args>
+	inline klang::Graph& Generic::Function<SIGNAL, Args...>::operator>>(klang::Graph& graph) {
+		graph.plot(*this);
+		return graph;
+	}
+
+	template<typename TYPE>
+	static klang::Graph& operator>>(TYPE(*function)(TYPE), klang::Graph& graph) {
+		graph.plot(function);
+		return graph;
+	}
 
 	// syntax equivalence: a = b is the same as b >> a
 	inline signal& signal::operator=(Output& b) { 
@@ -1762,12 +2084,6 @@ namespace klang {
 	inline THREAD_LOCAL Debug::Buffer Debug::buffer; //
 	inline std::mutex Console::_lock;
 
-#ifndef GRAPH_SIZE
-#define GRAPH_SIZE 44100
-#endif
-
-#define GRAPH_SERIES 4
-
 #define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
 
 	template <typename TYPE>
@@ -1841,297 +2157,6 @@ namespace klang {
 			}
 		}
 	};
-
-	struct Graph {
-        virtual ~Graph() { };
-        
-		struct Point {
-			double x, y;
-			bool valid() const { return !isnan(x) && !isinf(x) && !isnan(y); } // NB: y can be +/- inf
-		};
-
-		struct Axis;
-
-		struct Series : public Array<Point, GRAPH_SIZE + 1>, Input {
-            virtual ~Series() { }
-            
-			void* function = nullptr;
-            uint64_t hash = 0;
-            
-			using Array::add;
-			void add(double y) {
-				add({ (double)Array::size(), y });
-			}
-
-            template<typename SIGNAL, typename... Args>
-			void plot(Generic::Function<SIGNAL, Args...>& f, const Axis& x_axis) {
-				if (function != (void*)f || hash != f.hash()) {
-					clear();
-					function = (void*)f;
-                    hash = f.hash();
-					double x = 0;
-					const double dx = x_axis.range() / GRAPH_SIZE;
-					for (int i = 0; i <= GRAPH_SIZE; i++) {
-						x = x_axis.min + i * dx;
-						add({ x, (double)(signal)f(x) });
-					}
-				}
-			}
-
-			template<typename RETURN, typename ARG>
-			void plot(RETURN(*f)(ARG), const Axis& x_axis) {
-				if (function != (void*)f) {
-					clear();
-					function = (void*)f;
-                    hash = 0;
-					double x = 0;
-					const double dx = x_axis.range() / GRAPH_SIZE;
-					for (int i = 0; i <= GRAPH_SIZE; i++) {
-						x = x_axis.min + i * dx;
-						add({ x, (double)(signal)f((float)x) });
-					}
-				}
-			}
-            
-			bool operator==(const Series& in) const {
-				if (count != in.count) return false;
-				for (unsigned int i = 0; i < count; i++)
-					if (items[i].x != in.items[i].x || items[i].y != in.items[i].y)
-						return false;
-				return true;
-			}
-
-			bool operator!=(const Series& in) const {
-				return !operator==(in);
-			}
-            
-            void clear() {
-                function = nullptr;
-                Array::clear();
-            }
-
-			using Input::input;
-			void input() override {
-				add(in);
-			}
-		};
-
-		struct Axis {
-			double min = 0, max = 0;
-			bool valid() const { return max != min; }
-			double range() const { return max - min; }
-			bool contains(double value) const { return value >= min && value <= max; }
-			void clear() { min = max = 0; }
-
-			void from(const Series& series, double Point::* axis) {
-				if (!series.count) return;
-				int points = 0;
-				for (unsigned int p = 0; p < series.count; p++) {
-					const Point& pt = series[p];
-					if (pt.valid() && !isinf(pt.*axis)) {
-						if (!points || pt.*axis < min) min = pt.*axis;
-						if (!points || pt.*axis > max) max = pt.*axis;
-						points++;
-					}
-				}
-				if (std::abs(max) < 0.0000000001) max = 0;
-				if (std::abs(min) < 0.0000000001) min = 0;
-				if (std::abs(max) > 1000000000.0) max = 0;
-				if (std::abs(min) > 1000000000.0) min = 0;
-				if (min > max) max = min = 0;
-			}
-		};
-
-		struct Axes {
-			Axis x, y;
-			bool valid() const { return x.valid() && y.valid(); }
-			void clear() { x = { 0,0 }; y = { 0,0 }; }
-			bool contains(const Point& pt) const { return x.contains(pt.x) && y.contains(pt.y); }
-		};
-
-		void clear() {
-			dirty = true;
-			axes.clear();
-			for (int s = 0; s < GRAPH_SERIES; s++)
-				data[s].clear();
-			data.clear();
-		}
-
-		bool isActive() const {
-			if (data.count)
-				return true;
-			for (int s = 0; s < GRAPH_SERIES; s++)
-				if (data[s].count)
-					return true;
-			return false;
-		}
-
-		struct Data : public Array<Series, GRAPH_SERIES> {
-			Series* find(void* function) {
-				for (int s = 0; s < GRAPH_SERIES; s++)
-					if (operator[](s).function == function)
-						return &items[s];
-				return nullptr;
-			}
-		};
-
-		Graph& operator()(double min, double max) {
-			dirty = true;
-			axes.x.min = min; axes.x.max = max;
-			return *this;
-		}
-
-		Graph::Series& operator[](int index) {
-			dirty = true;
-			return data[index];
-		}
-
-		const Graph::Series& operator[](int index) const {
-			return data[index];
-		}
-
-		Graph& operator()(double x_min, double x_max, double y_min, double y_max) {
-			dirty = true;
-			axes.x.min = x_min; axes.x.max = x_max;
-			axes.y.min = y_min; axes.y.max = y_max;
-			return *this;
-		}
-
-		operator Series& () {
-			dirty = true;
-			return data[0];
-		}
-
-        template<typename SIGNAL, typename... Args>
-		void plot(Generic::Function<SIGNAL,Args...>& function) {
-			Graph::Series* series = Graph::data.find((void*)function);
-			if (!series)
-				series = Graph::data.add();
-			if (series) {
-				dirty = true;
-				if (!axes.x.valid())
-					axes.x = { -1, 1 };
-				series->plot(function, axes.x);
-			}
-		}
-        
-		template<typename TYPE>
-		void plot(TYPE(*function)(TYPE)) {
-			Graph::Series* series = Graph::data.find((void*)function);
-			if (!series)
-				series = Graph::data.add();
-			if (series) {
-				dirty = true;
-				if (!axes.x.valid())
-					axes.x = { -1, 1 };
-				series->plot(function, axes.x);
-			}
-		}
-        
-        template<typename FUNCTION, typename... VALUES>
-        void plot(FUNCTION f, VALUES... values) {
-            thread_local static Function fun(f);
-            Graph::Series* series = Graph::data.find((void*)fun);
-            if (!series)
-                series = Graph::data.add();
-            if (series) {
-                dirty = true;
-                if (!axes.x.valid())
-                    axes.x = { -1, 1 };
-                series->plot(fun.with(values...), axes.x);
-            }
-        }
-
-		template<typename TYPE>
-		void add(TYPE y) { data[0].add(y); dirty = true; }
-		void add(const Point pt) { data[0].add(pt); dirty = true; }
-
-		template<typename TYPE>
-		Graph& operator+=(TYPE y) { add(y); return *this; }
-		Graph& operator+=(const Point pt) { add(pt); return *this; }
-
-		template<typename TYPE>
-		Graph& operator=(TYPE(*function)(TYPE)) {
-			plot(function);
-			return *this;
-		}
-
-		Graph& operator=(std::initializer_list<Point> values) {
-			clear(); return operator+=(values);
-		}
-
-		Graph& operator+=(std::initializer_list<Point> values) {
-			for (const auto& value : values)
-				add(value);
-			return *this;
-		}
-        
-        template<typename... Args> Graph& operator<<(Function<Args...>& function){
-            plot(function.with());
-            return *this;
-        }
-       
-        template<typename TYPE> Graph& operator<<(TYPE& in) { add(in); return *this;  } // with processing
-        template<typename TYPE> Graph& operator<<(const TYPE& in) { add(in); return *this; } // without/after processing
-
-		// returns the user-defined axes
-		const Axes& getAxes() const { return axes; }
-
-		// calculates axes based on data
-		void getAxes(Axes& axes) const {
-			if (!axes.x.valid()) {
-				axes.x.clear();
-				for (int s = 0; s < GRAPH_SERIES; s++)
-					axes.x.from(data[s], &Point::x);
-				if (!axes.y.valid() && axes.y.max != 0)
-					axes.y.min = 0;
-			}
-			if (!axes.y.valid()) {
-				axes.y.clear();
-				for (int s = 0; s < GRAPH_SERIES; s++)
-					axes.y.from(data[s], &Point::y);
-				if (!axes.y.valid() && axes.y.max != 0)
-					axes.y.min = 0;
-			}
-		}
-
-		const Data& getData() const { return data; }
-		bool isDirty() const { return dirty; }
-		void setDirty(bool dirty) { Graph::dirty = dirty; }
-
-		void truncate(unsigned int count) {
-			if (count < data.count)
-				data.count = count;
-
-			for (int s = 0; s < GRAPH_SERIES; s++)
-				if (count < data[s].count)
-					data[s].count = count;
-		}
-
-	protected:
-		Axes axes;
-		Data data;
-		bool dirty = false;
-	};
-
-    template<typename SIGNAL, typename... Args>
-    inline Graph& Generic::Function<SIGNAL, Args...>::operator>>(Graph& graph) {
-        graph.plot(*this);
-        return graph;
-    }
-
-	template<typename TYPE>
-	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {
-		graph.plot(function);
-		return graph;
-	}
-
-	inline static Graph::Series& operator>>(Graph::Point pt, Graph::Series& series) {
-		series.add(pt);
-		return series;
-	}
-
-	THREAD_LOCAL static Graph graph;
 
 	template<int SIZE>
 	struct Delay : public Modifier {
@@ -3112,6 +3137,9 @@ namespace klang {
 				items[0].clear();
 				items[1].clear();
 			}
+
+			klang::Delay<SIZE> &l, &r;
+			Delay<SIZE>() : l(items[0]), r(items[1]) { }
 
 			signal tap(int delay) const {
 				int read = (items[0].position - 1) - delay;

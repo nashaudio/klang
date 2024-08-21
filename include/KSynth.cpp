@@ -24,7 +24,7 @@ PTR_FUNCTION synthCreate(float sampleRate) {
     klang::fs = sampleRate;                                                                                             
     //::stk::Stk::setSampleRate(sampleRate);                                                                              
     try { 
-        return (MiniPlugin::Synth*)new KSynth(new PLUGIN_NAME());
+        return (MiniPlugin::Synth*)new KSynth(new ::PLUGIN_NAME());
     } catch (...) {
         return nullptr;
     }

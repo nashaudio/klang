@@ -23,7 +23,7 @@ extern "C" {
         try {
             klang::fs = sampleRate;
             //::stk::Stk::setSampleRate(sampleRate);
-            return dynamic_cast<MiniPlugin::Effect*>(new KEffect(new PLUGIN_NAME()));
+            return dynamic_cast<MiniPlugin::Effect*>(new KEffect(new ::PLUGIN_NAME()));
         } catch(...) {
 			return nullptr;
 		}
