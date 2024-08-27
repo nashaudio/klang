@@ -67,7 +67,7 @@ struct Subtractive : Note {
    Sine lfo;
 
    event on(Pitch pitch, Amplitude velocity) {
-      const Frequency frequency(pitch > Type::Frequency);
+      const Frequency frequency(pitch -> Frequency);
       osc.set(frequency);
    }
 	 
@@ -90,7 +90,7 @@ struct Subtractive : Note {
    ADSR adsr;
 
    event on(Pitch pitch, Amplitude velocity) {
-      const Frequency frequency(pitch > Type::Frequency);
+      const Frequency frequency(pitch -> Frequency);
       osc.set(frequency);
       adsr.set(0.25, 0.25, 0.5, 5.0);
    }
