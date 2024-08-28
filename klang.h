@@ -2,7 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
+#include <cmath>
 #include <limits>
 #include <assert.h>
 #include <array>
@@ -12,273 +12,654 @@
 #include <cstdarg>
 #include <algorithm>
 #include <type_traits>
+#include <mutex>
+#include <functional>
+
+#include <float.h>
+
+#ifdef __wasm__
+#define THREAD_LOCAL 
+static inline float _sqrt(float x) { return __builtin_sqrtf(x); }
+static inline float _abs(float x) { return __builtin_fabsf(x); }
+#define SQRT _sqrt
+#define SQRTF _sqrt
+#define ABS _abs
+#define FABS _abs
+#endif
+#ifdef __APPLE__
+#define THREAD_LOCAL
+#define SQRT ::sqrt
+#define SQRTF ::sqrtf
+#define ABS ::abs
+#define FABS ::fabsf
+#endif
+#if defined(__WIN32__) || defined(WIN32)
+#define THREAD_LOCAL thread_local
+#define SQRT ::sqrt
+#define SQRTF ::sqrtf
+#define ABS ::abs
+#define FABS ::fabsf
+#endif
+
+#if defined(DEBUG) || defined(_DEBUG)
+	#define KLANG_DEBUG 1
+#else
+	#define KLANG_DEBUG 0
+#endif
+
+#ifndef GRAPH_SIZE
+#define GRAPH_SIZE 44100
+#endif
+
+#define GRAPH_SERIES 4
+
+// provide access to original math functions through std:: prefix
+namespace std {
+	namespace klang {
+		template<typename TYPE> TYPE sqrt(TYPE x) { return SQRT(x); }
+		template<typename TYPE> TYPE abs(TYPE x) { return ABS(x); }
+	}
+};
+
+#define IS_SIMPLE_TYPE(type)																					\
+	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
+	static_assert(!std::has_virtual_destructor_v<type>, "signal has virtual destructor");						\
+	static_assert(std::is_trivially_copyable_v<type>, "signal is not trivially copyable");						\
+	static_assert(std::is_trivially_copy_assignable_v<type>, "signal is not trivially copy assignable");		\
+	static_assert(std::is_trivially_copy_constructible_v<type>, "signal is not trivially copy assignable");		\
+	static_assert(std::is_trivially_destructible_v<type>, "signal is not trivially copy assignable");			\
+	static_assert(std::is_trivially_move_assignable_v<type>, "signal is not trivially copy assignable");		\
+	static_assert(std::is_trivially_move_constructible_v<type>, "signal is not trivially copy assignable");	
 
 namespace klang {
-	//template<typename Base, typename Derived>
-	//struct is_base_of_any : std::false_type {};
 
-	//template<typename Base, typename... Deriveds>
-	//struct is_base_of_any<Base, std::tuple<Deriveds...>> : std::disjunction<std::is_base_of<Base, Deriveds>...> {};
+    /// Klang language version (major.minor.build.debug)
+	struct Version { 
+		unsigned char major, minor, build, extra; 
+		bool isDebug() const { return extra & 1; } }
+	static constexpr version = { 0, 7, 0, KLANG_DEBUG }; 
 
-	//template<typename Base, typename... Deriveds>
-	//using is_base_of_any_t = typename is_base_of_any<Base, std::tuple<Deriveds...>>::type;
+    /// Klang mode identifiers (e.g. averages, level following)
+	enum Mode { Peak, RMS, Mean };
 
-	using namespace std;
+	#define DENORMALISE 1.175494e-38f
 
+    /// Constant scalar (pre-converted to double, float and int).
 	struct constant {
-		constant(double value) noexcept : f(float(value)), d(value) { }
+        
+        /// Create a constant from the given value.
+		constexpr constant(double value) noexcept
+			: d(value), f(static_cast<float>(value)), i(static_cast<int>(value)), inv(value == 0.0f ? 0.0f : static_cast<float>(1.0 / value)) { }
 
-		const float f;
-		const double d;
+		const double d; //!< Constant as double
+		const float f; //!< Constant as float
+		const int i; //!< Constant as integer
+		const float inv; //!< Inverse of constant
 
-		operator float() const noexcept { return f; }
+		constexpr operator float() const noexcept { return f; }
+
+        /// Constant raised to the power, x.
+		float operator^(float x) const { return std::pow(f, x); }
+		float operator^(int x) const { return static_cast<float>(std::pow(d, x)); }
+		float operator^(double x) const { return static_cast<float>(std::pow(d, x)); }
 	};
 
-	static const constant pi = 3.1415926535897932384626433832795;
+	#define CONSTANT constexpr constant
 
+#if __cplusplus == 201703L
+	#pragma warning(disable:4996) // disable deprecated warning
+    /// @internal
+	template <typename T>
+	inline constexpr bool is_literal = std::is_literal_type_v<T>;
+#else
+    /// @internal
+	template <typename T>
+	inline constexpr bool is_literal = std::is_trivially_constructible_v<T> && std::is_trivially_copyable_v<T> && std::is_trivially_destructible_v<T>;
+#endif
+    /// @internal
+	template<typename Base, typename Derived>
+	constexpr bool is_derived_from() {
+		return std::is_base_of_v<Base, Derived>;
+	}
+    /// @internal
+	template<typename Head, typename... Tail>
+	constexpr bool are_scalars(Head&& head, Tail&&... tail) {
+		using T = std::decay_t<decltype(head)>;
+		return std::is_scalar_v<T> && ((sizeof... (Tail)) == 0 || are_scalars(std::forward<decltype(tail)>(tail)...));
+	}
+    /// @internal
+	template <typename BASE, int EXP>
+	inline constexpr BASE poweri(BASE base) {
+		BASE result = 1;
+		constexpr bool negative = EXP < 0;
+		int exp = negative ? -EXP : EXP;
+		while (exp > 0) {
+			if (exp % 2 == 1)
+				result *= base;
+			base *= base;
+			exp >>= 1;
+		}
+		return negative ? 1 / result : result;
+	}
+    /// @internal
+	template <typename BASE, typename EXP>
+	using power_t = typename std::conditional_t<std::is_integral_v<BASE>, float, BASE>;
+
+    /// Raise @a base to the power @a exp.
+	template <typename BASE, typename EXP, std::enable_if_t < is_literal<EXP>, bool>>
+	inline constexpr power_t<BASE, EXP> power(BASE base, EXP exp) {
+		if constexpr (std::is_integral_v<EXP>) {
+			switch (exp) {
+			case 0:  return (BASE)1;
+			case 1:  return base;
+			case 2:  return base * base;
+			case 3:  return base * base * base;
+			case 4:  return base * base * base * base;
+			case -1: return (BASE)1 / base;
+			case -2: return (BASE)1 / (base * base);
+			case -3: return (BASE)1 / (base * base * base);
+			case -4: return (BASE)1 / (base * base * base * base);
+			default:
+				return poweri<BASE, exp>(base);
+			}
+		} else if constexpr (std::is_floating_point_v<EXP>) {
+			if constexpr (exp == (EXP)0)	   return 1;
+			else if constexpr (exp == (EXP)1)  return base;
+			else if constexpr (exp == (EXP)2)  return base * base;
+			else if constexpr (exp == (EXP)3)  return base * base * base;
+			else if constexpr (exp == (EXP)4)  return base * base * base * base;
+			else if constexpr (exp == (EXP)-1) return 1 / base;
+			else if constexpr (exp == (EXP)-2) return 1 / (base * base);
+			else if constexpr (exp == (EXP)-3) return 1 / (base * base * base);
+			else if constexpr (exp == (EXP)-4) return 1 / (base * base * base * base);
+		}
+		return (BASE)std::pow(base, exp);;
+	}
+
+    /// Raise @a base to the power @a exp.
+	template <typename BASE, typename EXP>
+	inline constexpr power_t<BASE, EXP> power(BASE base, EXP exp) {
+		if constexpr (std::is_integral_v<BASE>) {
+			return power(float(base), exp);
+		} else if constexpr (std::is_integral_v<EXP>) {
+			switch (exp) {
+			case 0:  return (BASE)1;
+			case 1:  return base;
+			case 2:  return base * base;
+			case 3:  return base * base * base;
+			case 4:  return base * base * base * base;
+			case -1: return (BASE)1 / base;
+			case -2: return (BASE)1 / (base * base);
+			case -3: return (BASE)1 / (base * base * base);
+			case -4: return (BASE)1 / (base * base * base * base);
+			}
+		} else if constexpr (std::is_floating_point_v<EXP>) {
+			if (base == (BASE)10)	 return (power_t<BASE, EXP>)::exp(exp * (EXP)2.3025850929940456840179914546843642076011014886287729760333279009);
+			else if (exp == (EXP)0)	 return (power_t<BASE, EXP>)1;
+			else if (exp == (EXP)1)  return base;
+			else if (exp == (EXP)2)  return base * base;
+			else if (exp == (EXP)3)  return base * base * base;
+			else if (exp == (EXP)4)  return base * base * base * base;
+			else if (exp == (EXP)-1) return (power_t<BASE, EXP>)1 / base;
+			else if (exp == (EXP)-2) return (power_t<BASE, EXP>)1 / (base * base);
+			else if (exp == (EXP)-3) return (power_t<BASE, EXP>)1 / (base * base * base);
+			else if (exp == (EXP)-4) return (power_t<BASE, EXP>)1 / (base * base * base * base);
+		}
+		return power_t<BASE, EXP>(std::pow(base, exp));
+	}
+
+    /// Return the minimum of two values.
+	template<typename TYPE1, typename TYPE2> inline TYPE1 min(TYPE1 a, TYPE2 b) { return a < b ? a : (TYPE1)b; };
+
+    /// Return the minimum of two values.
+	template<typename TYPE1, typename TYPE2> inline TYPE1 max(TYPE1 a, TYPE2 b) { return a > b ? a : (TYPE1)b; };
+
+    /// The mathematical constant, pi (and it's inverse).
+	constexpr constant pi =    { 3.1415926535897932384626433832795 };
+
+    /// The natural logorithm of 2 (and it's inverse).
+	constexpr constant ln2 =   { 0.6931471805599453094172321214581 };
+
+    /// The square root of 2 (and it's inverse).
+	constexpr constant root2 = { 1.4142135623730950488016887242097 };
+
+    /// Generates a random number between min and max. Use an integer types for whole numbers.
 	template<typename TYPE>
-	static TYPE random(const TYPE min, const TYPE max) { return rand() * ((max - min) / (TYPE)RAND_MAX) + min; }
+	inline static TYPE random(const TYPE min, const TYPE max) { return rand() * ((max - min) / (TYPE)RAND_MAX) + min; }
 
-	//static float sin(float phase) { return sinf(phase); }
+    /// Set the random seed (to allow repeatable random generation).
+	inline static void random(const unsigned int seed) { srand(seed); }
 
+    /// A function that handles an event.
 	typedef void event;
 
+    /// Variable-sized array, pre-allocated to a max. capacity.
 	template<typename TYPE, int CAPACITY>
 	struct Array {
 		TYPE items[CAPACITY];
 		unsigned int count = 0;
 
+        /// The maximum capacity of the array.
+		static int capacity() { return CAPACITY; }
+        
+        /// The current number of items in the array.
 		unsigned int size() const { return count; }
 
+        /// Add the specified item to the end of the array.
 		void add(const TYPE& item) {
 			if(count < CAPACITY)
 				items[count++] = item;
 		}
+        
+        /// Add a blank item to the end of the array, returning a pointer that allows the item to be modified.
 		TYPE* add() {
 			if (count < CAPACITY)
 				return &items[count++];
 			return nullptr;
 		}
-		void clear() { count = 0; }
         
+        /// Clear the array contents. Only resets the item count, without wiping memory.
+		void clear() { count = 0; }
+
+        /// Find the maximum value in the array.
+		float max() const {
+			float max = 0.f;
+			for (unsigned int i = 0; i < count; i++)
+				if (abs(items[i]) > max)
+					max = items[i];
+			return max;
+		}
+
+        /// Find the mean average of values in the array.
+		float mean() const {
+			float sum = 0.f;
+			for (unsigned int i = 0; i < count; i++)
+				sum += abs(items[i]);
+			return sum / count;
+		}
+
+        /// Find the root mean squared (RMS) average of values in the array.
+		float rms() const {
+			float sum = 0.f;
+			for (unsigned int i = 0; i < count; i++)
+				sum += items[i] * items[i];
+			return sqrt(sum / count);
+		}
+
+        /// Normalises values in the array to the specified @a target, based on peak, mean, or RMS value;
+		void normalise(float target = 1.f, int mode = Peak) {
+			if (!count) return;
+			
+			const float current = (mode == Peak) ? max() : (mode == Mean) ? mean() : rms();
+			const float scale = current == 0.f ? 0.f : target / current;
+			for (int i = 0; i < count; i++)
+				items[i] *= scale;
+		}
+        
+        /// Returns a reference to the array item at the given index.
 		TYPE& operator[](int index) { return items[index]; }
+        
+        /// Returns a read-only reference to the array item at the given index.
 		const TYPE& operator[](int index) const { return items[index]; }
+
+		/// Construct an array given the specified values.
+		Array(std::initializer_list<TYPE> init_list) {
+			count = std::min(static_cast<unsigned int>(init_list.size()), static_cast<unsigned int>(CAPACITY));
+			std::copy_n(init_list.begin(), count, items);
+		}
+
+        /// Construct an empty array.
+		Array() = default; // Default constructor to allow empty initialization
 	};
 
+    /// String of characters representing text.
 	template<int SIZE>
 	struct Text {
+        /// The character buffer.
 		char string[SIZE + 1] = { 0 };
+        
+        /// Maximum size of the string.
 		int capacity() const { return SIZE; }
 
+        /// Automatic cast to constant C-string.
 		operator const char* () const { return string; }
+        
+        /// Return constant C-string.
 		const char* c_str() const { return string; }
 
+        /// Create a new Text object from a C-string.
 		static Text from(const char* in) {
 			Text text;
 			text = in;
 			return text;
 		}
 
+        /// Assign C-String to Text object.
 		void operator=(const char* in) {
 			memcpy(string, in, SIZE);
 			string[SIZE] = 0;
 		}
+
+        ///  Returns true if Text matches the given C-string.
+		bool operator==(const char* in) const {
+			return strcmp(string, in) == 0;
+		}
+
+        ///  Returns true if Text does not matches the given C-string.
+		bool operator!=(const char* in) const {
+			return !operator==(in);
+		}
 	};
 
+    /// A short Text object used to label controls.
 	typedef Text<32> Caption;
 
 	struct Output;
 
 	struct relative;
+
+    /// A mono audio signal (equivalent to a float).
 	struct signal {
-		float value = 0.f;
+		float value;
 
+		/// Create signal from a constant.
 		signal(constant initial) : value(initial.f) { }
-		signal(float initial = 0.f) : value(initial) { }
-		signal(double initial) : value((float)initial) { }
-		signal(int value) : value((float)value) { }
+        
+        /// Create signal from a 32-bit float..
+		signal(const float initial = 0.f) : value(initial) { }
+        
+        /// Create signal from a 64-bit double.
+		signal(const double initial) : value((const float)initial) { }
+        
+        /// Create signal from an 32-bit signed integer.
+		signal(const int value) : value((const float)value) { }
 
+		/// Feedback operator (prevents further processing of returned value).
 		const signal& operator<<(const signal& input) {
 			value = input;
 			return *this;
 		}
 
+		/// Stream operator (feedforward; allows further processing)
 		signal& operator>>(signal& destination) const {
-			destination = value;
+			destination.value = value;
 			return destination;
 		}
 
-		signal& operator=(Output& in); // e.g. out = ramp		
-		signal& operator+=(Output& in); // e.g. out += ramp
+        /// Assign processed output of \a in to signal.
+		signal& operator=(Output& in);
+        /// Adds processed output of \a in to signal.
+		signal& operator+=(Output& in);
 
+        /// Add (mix) another signal to the signal.
 		signal& operator+=(const signal& x) { value += x.value; return *this; }
+        /// Subtract another signal from the signal.
 		signal& operator-=(const signal& x) { value -= x.value; return *this; }
-		signal& operator*=(const signal& x) { value *= x.value; return *this; }
+        /// Multiply (modulate) signal by another signal.
+        signal& operator*=(const signal& x) { value *= x.value; return *this; }
+        /// Divide signal by another signal.
 		signal& operator/=(const signal& x) { value /= x.value; return *this; }
 
+        /// Add the specified amount to the signal.
 		signal& operator+=(float x) { value += x; return *this; }
+        /// Subtract the specified amount from the signal.
 		signal& operator-=(float x) { value -= x; return *this; }
+        /// Multiply signal by the specified amount.
 		signal& operator*=(float x) { value *= x; return *this; }
+        /// Divide signal by the specified amount.
 		signal& operator/=(float x) { value /= x; return *this; }
 
+        /// Add the specified amount to the signal.
 		signal& operator+=(double x) { value += (float)x; return *this; }
+        /// Subtract the specified amount from the signal.
 		signal& operator-=(double x) { value -= (float)x; return *this; }
+        /// Multiply signal by the specified amount.
 		signal& operator*=(double x) { value *= (float)x; return *this; }
+        /// Divide signal by the specified amount.
 		signal& operator/=(double x) { value /= (float)x; return *this; }
 
+        /// Add the specified amount to the signal.
 		signal& operator+=(int x) { value += (float)x; return *this; }
+        /// Subtract the specified amount from the signal.
 		signal& operator-=(int x) { value -= (float)x; return *this; }
+        /// Multiply signal by the specified amount.
 		signal& operator*=(int x) { value *= (float)x; return *this; }
+        /// Divide signal by the specified amount.
 		signal& operator/=(int x) { value /= (float)x; return *this; }
 
+        /// Add two signals together.
 		signal operator+(float x) const { return value + x; }
+        /// Subtract one signal from another.
 		signal operator-(float x) const { return value - x; }
+        /// Multiply (modulate) two signals.
 		signal operator*(float x) const { return value * x; }
+        /// Divide one signal by another.
 		signal operator/(float x) const { return value / x; }
 		
+        /// Return a copy of the signal offset by x.
 		signal operator+(double x) const { return value + (float)x; }
+        /// Return a copy of the signal offset by -x.
 		signal operator-(double x) const { return value - (float)x; }
+        /// Return a copy of the signal scaled by x.
 		signal operator*(double x) const { return value * (float)x; }
+        /// Return a copy of the signal divided by.
 		signal operator/(double x) const { return value / (float)x; }
 		
+        /// Return a copy of the signal offset by x.
 		signal operator+(int x) const { return value + (float)x; }
+        /// Return a copy of the signal offset by -x.
 		signal operator-(int x) const { return value - (float)x; }
+        /// Return a copy of the signal scaled by x.
 		signal operator*(int x) const { return value * (float)x; }
+        /// Return a copy of the signal divided by x.
 		signal operator/(int x) const { return value / (float)x; }
 
-		operator const float() const { return value; }
-		operator float&() {		 return value; }
+        /// Return a copy of the signal raised to the power of x.
+		signal operator^(float x) const { return power(value, x); }
+        /// Return a copy of the signal raised to the power of x.
+		signal operator^(double x) const { return power(value, x); }
+        /// Return a copy of the signal raised to the power of x.
+		signal operator^(int x) const { return power(value, x); }
 
+		operator const float() const {	return value; }
+		operator float&() {				return value; }
+
+        /// Check if the signal contains a denormal value.
+		bool isDenormal() const {
+			const unsigned int bits = *(const unsigned int*)&value;
+			return !(bits & 0x7F800000) && (bits & 0x007FFFFF);
+		}
+
+        /// Returns the number of channels (1 = mono).
 		int channels() const { return 1; }
 
-		relative operator+() const;
-		relative relative() const;
+        /// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
+		relative operator+() const;	// unary + operator produces relative signal
+        /// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
+		relative relative() const;	// 
 	};
 
-	struct relative : public signal {
-//		using signal::signal;
-//		relative(const signal& in) : signal(in) { }
-	};
+	/// @internal signal MUST compile as a float
+	static_assert(sizeof(signal) == sizeof(float), "signal != float");
+	IS_SIMPLE_TYPE(signal)
 
+	/// A signal used as an offset relative to another signal.
+	struct relative : public signal { };
+
+    /// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
 	inline relative signal::operator+() const { return { value }; }
+    /// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
 	inline relative signal::relative() const { return { value }; }
 
-	static signal& operator>>(float input, signal& destination) {
+	/// Stream a literal / constant / scalar type into a signal.
+	inline static signal& operator>>(float input, signal& destination) { // CHECK: should this be signal, rather than float?
 		destination << signal(input);
 		return destination;
 	}
 
+	/// A multi-channel audio signal (e.g. stereo).
 	template<int CHANNELS = 2>
 	struct signals {
+        /// @cond
 		union {
-			signal value[CHANNELS];
-			struct { signal l, r; };
+			signal value[CHANNELS]; ///< Array of channel values.
+            struct {
+                signal l; ///< Left channel
+                signal r; ///< Right channel
+            };
 		};
+        /// @endcond
 
+        /// Return the mono mix of a stereo channel.
+		signal mono() const { return (l + r) * 0.5f; }
+
+        /// Return a reference to the signal at the specified index (0 = left, 1 = right).
 		signal& operator[](int index) { return value[index]; }
+        /// Return a read-only reference to the signal  at the specified index (0 = left, 1 = right).
 		const signal& operator[](int index) const { return value[index]; }
 
+        /// Create a stereo signal with the given value.
 		signals(float initial = 0.f) : l(initial), r(initial) { }
+        /// Create a stereo signal with the given value.
 		signals(double initial) : l((float)initial), r((float)initial) { }
+        /// Create a stereo signal with the given value.
 		signals(int initial) : l((float)initial), r((float)initial) { }
 
+        /// Create a stereo signal with the given left and right value.
 		signals(float left, float right) : l(left), r(right) { }
+        /// Create a stereo signal with the given left and right value.
 		signals(double left, double right) : l((float)left), r((float)right) { }
+        /// Create a stereo signal with the given left and right value.
 		signals(int left, int right) : l((float)left), r((float)right) { }
 
-		template<class... Types>
-		signals(Types... initial) : value { initial... } { }
+        /// Create a multi-channel signal with the given channel values.
+		template <typename... Args, typename = std::enable_if_t<(std::is_convertible_v<Args, signal> && ...)>>
+		signals(Args&... initial) : value{ initial... } { }
+        /// Create a multi-channel signal with the given channel values.
+		template <typename... Args, typename = std::enable_if_t<(std::is_scalar_v<Args> && ...)>>
+		signals(Args... initial) : value { initial... } { }
 
+        /// Returns the number of channels in the signal.
 		int channels() const { return CHANNELS; }
 
+        /// Feedback operator (prevents further processing of returned value).
 		const signals& operator<<(const signals& input) {
-			value = input;
-			return *this;
+			return this->operator=(input);
 		}
 
+        /// Stream operator (feedforward; allows further processing).
 		signals& operator>>(signals& destination) const {
-			destination = value;
+			destination = *this;
 			return destination;
 		}
 
-		signals& operator+=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] += x[v]; return *this; }
-		signals& operator-=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] -= x[v]; return *this; }
-		signals& operator*=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] *= x[v]; return *this; }
-		signals& operator/=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] /= x[v]; return *this; }
+        /// Add (mix) another signal to the signal.
+        signals& operator+=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] += x[v]; return *this; }
+        /// Subtract another signal from the signal.
+        signals& operator-=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] -= x[v]; return *this; }
+        /// Multiply (modulate) signal by another signal.
+        signals& operator*=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] *= x[v]; return *this; }
+        /// Divide signal by another signal.
+        signals& operator/=(const signals x) { for (int v = 0; v < CHANNELS; v++) value[v] /= x[v]; return *this; }
 
+        /// Add two multi-channel signals together.
 		signals operator+(const signals x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] += x[v]; return s; }
-		signals operator-(const signals x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] -= x[v]; return s; }
-		signals operator*(const signals x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] *= x[v]; return s; }
+        /// Subtract one multi-channel signal from another.
+        signals operator-(const signals x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] -= x[v]; return s; }
+        /// Multiply (modulate) two multi-channel signals.
+        signals operator*(const signals x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] *= x[v]; return s; }
+        /// Divide one multi-channel signal by another.
 		signals operator/(const signals x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] /= x[v]; return s; }
 
+		//signals& operator+=(const signal x) { for (int v = 0; v < CHANNELS; v++) value[v] += x; return *this; }
+		//signals& operator-=(const signal x) { for (int v = 0; v < CHANNELS; v++) value[v] -= x; return *this; }
+		//signals& operator*=(const signal x) { for (int v = 0; v < CHANNELS; v++) value[v] *= x; return *this; }
+		//signals& operator/=(const signal x) { for (int v = 0; v < CHANNELS; v++) value[v] /= x; return *this; }
+
+        /// Return a copy of the multi-channel signal, adding a mono signal to each channel.
 		signals operator+(const signal x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] += x; return s; }
+        /// Return a copy of the multi-channel signal, subtracting a mono signal from each channel.
 		signals operator-(const signal x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] -= x; return s; }
+        /// Return a copy of the multi-channel signal, multiplying (modulating) each channel by a mono signal.
 		signals operator*(const signal x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] *= x; return s; }
+        /// Return a copy of the multi-channel signal, dividing each channel by a mono signal.
 		signals operator/(const signal x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] /= x; return s; }
 
-		signals operator+(float x) const { signals s = *this; for(int v = 0; v < CHANNELS; v++) s[v] += x; return s; }
+        /// Return a copy of the signal with each channel offset by x.
+        signals operator+(float x) const { signals s = *this; for(int v = 0; v < CHANNELS; v++) s[v] += x; return s; }
+        /// Return a copy of the signal with each channel offset by -x.
 		signals operator-(float x) const { signals s = *this; for(int v = 0; v < CHANNELS; v++) s[v] -= x; return s; }
+        /// Return a copy of the signal  with each channel scaled by x.
 		signals operator*(float x) const { signals s = *this; for(int v = 0; v < CHANNELS; v++) s[v] *= x; return s; }
+        /// Return a copy of the signal with each channel divided by x.
 		signals operator/(float x) const { signals s = *this; for(int v = 0; v < CHANNELS; v++) s[v] /= x; return s; }
 
+        /// Return a copy of the signal with each channel offset by x.
 		signals operator+(double x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] += x; return s; }
+        /// Return a copy of the signal with each channel offset by -x.
 		signals operator-(double x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] -= x; return s; }
+        /// Return a copy of the signal  with each channel scaled by x.
 		signals operator*(double x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] *= x; return s; }
+        /// Return a copy of the signal with each channel divided by x.
 		signals operator/(double x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] /= x; return s; }
 
+        /// Return a copy of the signal with each channel offset by x.
 		signals operator+(int x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] += x; return s; }
+        /// Return a copy of the signal with each channel offset by -x.
 		signals operator-(int x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] -= x; return s; }
+        /// Return a copy of the signal  with each channel scaled by x.
 		signals operator*(int x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] *= x; return s; }
+        /// Return a copy of the signal with each channel divided by x.
 		signals operator/(int x) const { signals s = *this; for (int v = 0; v < CHANNELS; v++) s[v] /= x; return s; }
 	};
 
-	struct increment {
-		float amount;
-		const float size;
-
-		//increment(const increment& in) : amount(in.amount), size(in.size) { }
-		increment(float amount, const float size = 2 * pi) : amount(amount), size(size) { }
-		increment(float amount, int size) : amount(amount), size((float)size) { }
-		increment(float amount, double size) : amount(amount), size((float)size) { }
-
-		increment& operator=(float in) { amount = in; return *this;  }
-
-		//operator float() const { return amount; }
-	};
-
-	enum class Type : short {
-		Generic = 0,
-		Frequency,
-		Pitch,
-		Gain,
-		Amplitude,
-		Phase
-	};
-
-	typedef int Conversion;
-	constexpr Conversion operator>(Type A, Type B) {
-		return (((int)A) << 4) | ((int)B);
+    /// Return a copy of the signal with each channel offset by x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator+(float x, const signals<CHANNELS>& y) { return y + x; }
+    /// Return a copy of the signal with each channel subtracted from  x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator-(float x, const signals<CHANNELS>& y) { return -y + x; }
+    /// Return a copy of the signal  with each channel scaled by x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator*(float x, const signals<CHANNELS>& y) { return y * x; }
+    /// Return a copy of the signal with each channel divided into x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator/(float x, const signals<CHANNELS>& y) { 
+		signals<CHANNELS> s = { 0.f };
+		for(int c=0; c<CHANNELS; c++)
+			s[c] = x / y[c];
+		return std::move(s);
 	}
 
-	// signal used as a control parameter (possibly at audio rate)
-	class param : public signal {
-		struct ptr : public std::shared_ptr<param> {
-			ptr(param* p) : std::shared_ptr<param>(p) { }
-			virtual ~ptr() { }
-			operator const param () { return *get(); }
-		};
+    /// @cond
+    /// Helper class for converting units / quantities
+    struct Conversion : public signal {
+        using signal::signal;
+    //        operator klang::signal& () { return signal; };
+    };
+    /// @endcond
 
-	protected:
-		virtual Type type() const { return Type::Generic; }
+	/// A phase or wavetable increment.
+	struct increment {
+		float amount; ///< The current phase.
+		const float size; ///< The length of a a full cycle (e.g. 2 pi or wavetable size)
 
-	public:
-		virtual ~param() { }
+        /// Create a phase increment (default to radians).
+		increment(float amount, const float size = 2 * pi) : amount(amount), size(size) { }
+        /// Create a phase increment (wavetable size).
+		increment(float amount, int size) : amount(amount), size((float)size) { }
+        /// Create a phase increment.
+		increment(float amount, double size) : amount(amount), size((float)size) { }
 
-		using signal::signal;
-		//using signal::operator+;
+        /// Set current phase.
+		increment& operator=(float in) { amount = in; return *this;  }
+	};
+
+	struct Control;
+
+	/// A signal used as a control parameter.
+	struct param : public signal {
 		param(constant in) : signal(in.f) { }
-		param(float initial = 0.f) : signal(initial) { }
+		param(const float initial = 0.f) : signal(initial) { }
 		param(const signal& in) : signal(in) { }
+		param(signal& in) : signal(in) { }
+		param(Control& in); // see Control declaration
 
 		param& operator+=(const increment& increment) {
 			value += increment.amount;
@@ -286,21 +667,18 @@ namespace klang {
 				value -= increment.size;
 			return *this;
 		}
-
-		void convert(const param& from, param& to);
-		virtual param* convert(Type to);
-
-		ptr operator>(Type type) {
-			return ptr(convert(type));
-		}
 	};
 
+	// param should also be binary compatible with float / signal
+	static_assert(sizeof(param) == sizeof(float), "param != float");
+
 	// support left-to-right and right-to-left signal flow
-	static param& operator>>(param from, param& to) {
+	inline static param& operator>>(param& from, param& to) {
 		to << from;
 		return to;
 	}
 
+    /// @cond
 	struct params {
 		param* parameters;
 		const int size;
@@ -314,6 +692,7 @@ namespace klang {
 
 		param& operator[](int index) { return parameters[index]; }
 	};
+    /// @endcond
 
 	inline float fast_mod(float x, float y) {
 		const unsigned int i = (((unsigned int)(x * (float(UINT_MAX) + 1.f) / y)) >> 9) | 0x3f800000;
@@ -361,6 +740,35 @@ namespace klang {
 		return (*(const double*)&i - 1.0) * size;
 	}
 
+    /// Matrix processor
+	//template<int X, int Y = X>
+	struct Matrix {
+		float v[4][4] = { 0 };
+
+		float* operator[](int col) { return v[col]; }
+		const float* operator[](int col) const { return v[col]; }
+
+		float& operator()(int col, int row) { return v[col][row]; }
+		float operator()(int col, int row) const { return v[col][row]; }
+
+		signals<4> operator<<(const signals<4>& in) const {
+			return { v[0][0] * in[0] + v[0][1] * in[1] + v[0][2] * in[2] + v[0][3] * in[3],
+					 v[1][0] * in[0] + v[1][1] * in[1] + v[1][2] * in[2] + v[1][3] * in[3],
+					 v[2][0] * in[0] + v[2][1] * in[1] + v[2][2] * in[2] + v[2][3] * in[3],
+					 v[3][0] * in[0] + v[3][1] * in[1] + v[3][2] * in[2] + v[3][3] * in[3] };
+		}
+	};
+
+	inline signals<4> operator*(const signals<4>& in, const Matrix& m) {
+		return { m[0][0] * in[0] + m[0][1] * in[1] + m[0][2] * in[2] + m[0][3] * in[3],
+				 m[1][0] * in[0] + m[1][1] * in[1] + m[1][2] * in[2] + m[1][3] * in[3],
+				 m[2][0] * in[0] + m[2][1] * in[1] + m[2][2] * in[2] + m[2][3] * in[3],
+				 m[3][0] * in[0] + m[3][1] * in[1] + m[3][2] * in[2] + m[3][3] * in[3] };
+	}
+
+	inline signals<4> operator>>(const signals<4>& in, const Matrix& m) { return operator*(in, m); }
+
+    /// @cond
 	template<typename TYPE, typename _TYPE>
 	struct phase {
 		static constexpr TYPE twoPi = TYPE(2.0 * 3.1415926535897932384626433832795);
@@ -384,7 +792,6 @@ namespace klang {
 
 		// convert uint32 to float [0, 1)
 		operator TYPE() const {
-			//const _TYPE phase = (i >> 9) | 0x3f800000;
 			const _TYPE phase = (i >> 12ULL) | 0x3FF0000000000000ULL;
 			return (*(const TYPE*)&phase - TYPE(1.0)) * twoPi;
 		}
@@ -398,13 +805,13 @@ namespace klang {
 		//	assert((float)(p = 2 * pi).radians() == 0.f);
 		//}
 	};
+    /// @endcond
 
+    /// Control parameter (phase)
 	struct Phase : public param {
-		Type type() const { return Type::Phase; };
-
 		//INFO("Phase", 0.f, 0.f, 1.0f)
 		using param::param;
-		Phase(float p = 0.f) : param(p) { };
+		/*Phase(const float p = 0.f) : param(p) { };*/
 
 		param& operator+=(float increment) {
 			if (increment >= (2 * pi))
@@ -435,18 +842,33 @@ namespace klang {
 
 		Phase operator%(float modulus) {
 			return fast_mod(value, modulus);
-			//return fmodf(value, modulus);
 		}
 	};
 
-	struct Pitch : public param {
-		Type type() const { return Type::Pitch; };
+	struct Frequency;
 
+    /// Control parameter (pitch)
+	struct Pitch : public param {
 		//INFO("Pitch", 60.f, 0.f, 127.f)
 		using param::param;
 		
-		Pitch(float p = 60.f) : param(p) { };
-		Pitch(int p) : param((float)p) { };
+		//Pitch(float p = 60.f) : param(p) { };
+		//Pitch(int p) : param((float)p) { };
+
+		// convert note number to pitch class and octave (e.g. C#5)
+		const char* text() const {
+			THREAD_LOCAL static char buffer[32] = { 0 };
+			const char* const notes[12] = { "C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B" };
+			snprintf(buffer, 32, "%s%d", notes[(int)value % 12], (int)value / 12);
+			return buffer;
+		}
+
+        const Pitch* operator->() {
+            Frequency = 440.f * power(2.f, (value - 69.f) / 12.f);
+            return this;
+        }
+
+        THREAD_LOCAL static Conversion Frequency;
 
 		template<typename TYPE>	Pitch operator+(TYPE in) { return value + in; }
 		template<typename TYPE>	Pitch operator-(TYPE in) { return value - in; }
@@ -454,50 +876,80 @@ namespace klang {
 		template<typename TYPE>	Pitch operator/(TYPE in) { return value / in; }
 	};
 
-	//static Pitch operator+(const Pitch& a, float b) {		return a.value + b;			}
+    THREAD_LOCAL inline Conversion Pitch::Frequency;
 
+//	inline THREAD_LOCAL Pitch::Convert Pitch::Frequency;
+
+    /// Control parameter (frequency)
 	struct Frequency : public param { 
-		Type type() const { return Type::Frequency; };
-
 		//INFO("Frequency", 1000.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 		Frequency(float f = 1000.f) : param(f) { };
 	};
 
-	static Frequency fs = 44100.f; // sample rate
+    /// Sample rate constants
+	static struct SampleRate {
+		float f;        ///< sample rate (float)
+		int i;          ///< sample rate (integer)
+		double d;       ///< sample rate (double)
+		float inv;      ///< 1 / sample rate (inverse)
+		float w;        ///< angular frequency (omega)
+		float nyquist;  ///< nyquist frequency (f / 2)
 
-	template<typename TYPE>
-	inline static TYPE operator<(Type type, const TYPE& source) {
+		SampleRate(float sr) : f(sr), i(int(sr+0.001f)), d((double)sr), inv(1.f / sr), w(2.0f * pi * inv), nyquist(sr / 2.f) { }
 
-	}
+		operator float() { return f; }
+	} fs(44100); // sample rate
 
-	// gain (decibels)
+	struct Amplitude;
+	
+    /// Control parameter (idecibels)
 	struct dB : public param {
-		Type type() const { return Type::Gain; };
-
 		//INFO("dB", 0.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 
 		dB(float gain = 0.f) : param(gain) { };
+
+		const dB* operator->() {
+			Amplitude = power(10, value * 0.05f);
+			return this;
+		}
+
+		THREAD_LOCAL static Conversion Amplitude;
 	};
 
-	// amplitude (linear gain)
+	/// Control parameter (linear amplitude)
 	struct Amplitude : public param {
 		//INFO("Gain", 1.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 
 		Amplitude(float a = 1.f) : param(a) { };
 		Amplitude(const dB& db) {
-			value = powf(10.f, db.value * 0.05f);
+			value = power(10, db.value * 0.05f); // 10 ^ (db * 0.05f);
 		};
 
-		operator dB() const {
-			return 20.f * log10f(value);
+		//dB operator >> (dB) const {
+		//	return 20.f * log10f(value);
+		//}
+		//operator dB() const {
+		//	return 20.f * log10f(value);
+		//}
+
+		const Amplitude* operator->() const {
+			dB = 20.f * log10f(value);
+			return this;
 		}
+
+		THREAD_LOCAL static Conversion dB;
 	};
 
+	THREAD_LOCAL inline Conversion dB::Amplitude;
+	THREAD_LOCAL inline Conversion Amplitude::dB;
+
+    /// Control parameter (velocity)
 	typedef Amplitude Velocity;
 
+    /// UI control / parameter
 	struct Control
 	{
 		enum Type
@@ -512,6 +964,7 @@ namespace klang {
 			WHEEL,  // MIDI control (Pitch Bend / Mod Wheel only)
 		};
 
+        /// Control size
 		struct Size
 		{
 			Size(int x = -1, int y = -1, int width = -1, int height = -1)
@@ -537,22 +990,86 @@ namespace klang {
 		Size size;              // position (x,y) and size (height, width) of the control (use AUTO_SIZE for automatic layout)
 		Options options;        // text options for menus and group buttons
 
-		float value;            // current control value;
+		signal value;           // current control value
+		signal smoothed;		// smoothed control value (filtered)
+
+		operator signal& () { return value; }
+		operator const signal&() const { return value; }
+		operator param() const { return value; }
+		operator float() const { return value.value; }
+
+		static constexpr float smoothing = 0.999f;
+		signal smooth() { return smoothed = smoothed * smoothing + (1.f - smoothing) * value; }
+
+		operator Control*() { return this; }
+
+		Control& set(float x) {
+			value = std::clamp(x, min, max);
+			return *this;
+		}
+
+		Control& operator+=(float x) { value += x; return *this; }
+		Control& operator*=(float x) { value *= x; return *this; }
+		Control& operator-=(float x) { value -= x; return *this; }
+		Control& operator/=(float x) { value /= x; return *this; }
+
+		//float operator+(float x) const { return value + x; }
+		//float operator*(float x) const { return value * x; }
+		//float operator-(float x) const { return value - x; }
+		//float operator/(float x) const { return value / x; }
+
+		template<typename TYPE> signal operator+(const Control& x) const { return value + x; }
+		template<typename TYPE> signal operator*(const Control& x) const { return value * x; }
+		template<typename TYPE> signal operator-(const Control& x) const { return value - x; }
+		template<typename TYPE> signal operator/(const Control& x) const { return value / x; }
+
+		template<typename TYPE> float operator+(TYPE x) const { return value + x; }
+		template<typename TYPE> float operator*(TYPE x) const { return value * x; }
+		template<typename TYPE> float operator-(TYPE x) const { return value - x; }
+		template<typename TYPE> float operator/(TYPE x) const { return value / x; }
+
+		template<typename TYPE> Control& operator<<(TYPE& in) { value = in; return *this;  }		// assign to control with processing
+		template<typename TYPE> Control& operator<<(const TYPE& in) { value = in; return *this;  }	// assign to control without/after processing
+
+		template<typename TYPE> TYPE& operator>>(TYPE& in) { return value >> in; }					// stream control to signal/object (allows processing)
+		template<typename TYPE> const TYPE& operator>>(const TYPE& in) { return value >> in; }		// stream control to signal/object (no processing)
 	};
 
 	const Control::Size Automatic = { -1, -1, -1, -1 };
 	const Control::Options NoOptions;
 
-	static Control Dial(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
+    /// Mapped UI control
+	struct ControlMap {
+		Control* control;
+
+		ControlMap() : control(nullptr) { };
+		ControlMap(Control& control) : control(&control) { };
+
+		operator Control&() { return *control; }
+		operator signal& () { return control->value; }
+		operator const signal&() const { return control->value; }
+		operator param() const { return control->value; }
+		operator float() const { return control->value; }
+		signal smooth() { return control->smooth(); }
+
+		template<typename TYPE> Control& operator<<(TYPE& in) { control->value = in; return *control; }		// assign to control with processing
+		template<typename TYPE> Control& operator<<(const TYPE& in) { control->value = in; return *control; }	// assign to control without/after processing
+	};
+
+	IS_SIMPLE_TYPE(Control);
+
+	inline param::param(Control& in) : signal(in.value) { }
+
+	inline static Control Dial(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Control::ROTARY, min, max, initial, Automatic, NoOptions, initial };	}
 
-	static Control Button(const char* name)
+	inline static Control Button(const char* name)
 	{	return { Caption::from(name), Control::BUTTON, 0, 1, 0.f, Automatic, NoOptions, 0.f };	}
 
-	static Control Toggle(const char* name, bool initial = false)
+	inline static Control Toggle(const char* name, bool initial = false)
 	{	return { Caption::from(name), Control::TOGGLE, 0, 1, initial ? 1.f : 0.f, Automatic, NoOptions, initial ? 1.f : 0.f};	}
 
-	static Control Slider(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
+	inline static Control Slider(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Control::SLIDER, min, max, initial, Automatic, NoOptions, initial }; }
 
 	template<typename... Options>
@@ -565,24 +1082,27 @@ namespace klang {
 		return { Caption::from(name), Control::MENU, 0, menu.size() - 1.f, 0, Automatic, menu, 0 }; 
 	}
 
-	static Control Meter(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
+	inline static Control Meter(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f)
 	{	return { Caption::from(name), Control::METER, min, max, initial, Automatic, NoOptions, initial }; }
 
-	static Control PitchBend()
+	inline static Control PitchBend()
 	{	return { { "PITCH\nBEND" }, Control::WHEEL, 0.f, 16384.f, 8192.f, Automatic, NoOptions, 8192.f }; }
 
-	static Control ModWheel()
+	inline static Control ModWheel()
 	{	return { { "MOD\nWHEEL" }, Control::WHEEL, 0.f, 127.f, 0.f, Automatic, NoOptions, 0.f }; }
 
+    /// Plugin UI controls
 	struct Controls : Array<Control, 128>
 	{
+		float value[128] = { 0 };
+
 		void operator+= (const Control& control) {
 			items[count++] = control;
 		}
 
 		void operator= (const Controls& controls) {
-			for (int c = 0; c < 128 && controls(c).type != Control::NONE; c++)
-				operator+=(controls(c));
+			for (int c = 0; c < 128 && controls[c].type != Control::NONE; c++)
+				operator+=(controls[c]);
 		}
 
 		void operator=(std::initializer_list<Control> controls) {
@@ -598,34 +1118,47 @@ namespace klang {
 			items[count].initial = initial;
 			items[count].size = size;
 			items[count++].value = initial;
+		}	
+
+		bool changed() {
+			bool changed = false;
+			for (unsigned int c = 0; c < count; c++) {
+				if (items[c].value != value[c]) {
+					value[c] = items[c].value;
+					changed = true;
+				}
+			}
+			return changed;
 		}
 
-		float& operator[](int index) { return items[index].value; }
-		float operator[](int index) const { return items[index].value; }
+		//float& operator[](int index) { return items[index].value; }
+		//signal operator[](int index) const { return items[index].value; }
 
-		Control& operator()(int index) { return items[index]; }
-		Control operator()(int index) const { return items[index]; }
+		//Control& operator()(int index) { return items[index]; }
+		//Control operator()(int index) const { return items[index]; }
 	};
 
 	typedef Array<float, 128> Values;
 
-	struct Program {
+    /// Factory preset
+	struct Preset {
 		Caption name = { 0 };
 		Values values;
 	};
 
-	template<typename... Settings>
-	static Program Preset(const char* name, const Settings... settings)
-	{	Values values;
-		float preset[] = { (float)settings... };
-		int nbSettings = sizeof...(settings);
-		for(int s=0; s<nbSettings; s++)
-			values.add(preset[s]);
-		return { Caption::from(name), values };
-	}
+	//template<typename... Settings>
+	//static Program Preset(const char* name, const Settings... settings)
+	//{	Values values;
+	//	float preset[] = { (float)settings... };
+	//	int nbSettings = sizeof...(settings);
+	//	for(int s=0; s<nbSettings; s++)
+	//		values.add(preset[s]);
+	//	return { Caption::from(name), values };
+	//}
 
-	struct Presets : Array<Program, 128> { 
-		void operator += (const Program& preset) {
+    /// Factory presets
+	struct Presets : Array<Preset, 128> {
+		void operator += (const Preset& preset) {
 			items[count++] = preset;
 		}
 
@@ -634,7 +1167,7 @@ namespace klang {
 				operator+=(presets[p]);
 		}
 
-		void operator=(std::initializer_list<Program> presets) {
+		void operator=(std::initializer_list<Preset> presets) {
 			for(auto preset : presets)
 				operator+=(preset);
 		}
@@ -651,30 +1184,43 @@ namespace klang {
 		}
 	};
 	
+    /// Audio buffer (mono)
 	class buffer {
 	protected:
+		constexpr unsigned int capacity(unsigned int n) {
+			// Decrement n to handle the case where n is already a power of 2
+			n--;
+			n |= n >> 1;
+			n |= n >> 2;
+			n |= n >> 4;
+			n |= n >> 8;
+			n |= n >> 16;
+			// Increment n to get the next power of 2
+			n++;
+			return n;
+		}
+		const unsigned int mask = 0xFFFFFFFF;
+		const bool owned = false;
 		float* samples;
 		signal* ptr;
-		signal* end;
-		bool owned = false;
+		signal* end;	
 	public:
+		typedef signal signal;
 		const int size;
 
 		buffer(float* buffer, int size)
-		: samples(buffer), size(size) { 
+		: owned(false), samples(buffer), size(size) {
 			rewind();
 		}
 
 		buffer(float* buffer, int size, float initial)
-		: samples(buffer), size(size) { 
+		: owned(false), samples(buffer), size(size) {
 			rewind();
 			set(initial);
 		}
 
 		buffer(int size, float initial = 0)
-		: samples(new float[size]), owned(true), size(size) {
-			samples = new float[size];
-
+		: mask(capacity(size) - 1), owned(true), samples(new float[capacity(size)]), size(size) {
 			rewind();
 			set(initial);
 		}
@@ -685,6 +1231,9 @@ namespace klang {
 		}
 
 		void rewind(int offset = 0) {
+#ifdef _MSC_VER
+			_controlfp_s(nullptr, _DN_FLUSH, _MCW_DN);
+#endif
 			ptr = (signal*)&samples[offset];
 			end = (signal*)&samples[size];
 		}
@@ -709,7 +1258,7 @@ namespace klang {
 		}
 
 		signal& operator[](int offset) {
-			return *(signal*)&samples[offset];
+			return *(signal*)&samples[offset & mask]; // owned array can't write beyond allocation
 		}
 
 		signal operator[](float offset) {
@@ -734,8 +1283,16 @@ namespace klang {
 			return *ptr;
 		}
 
-		operator bool() const {
-			return ptr < end;
+		operator const signal& () const {
+			return *ptr;
+		}
+
+		explicit operator double() const {
+			return *ptr;
+		}
+
+		bool finished() const {
+			return ptr == end;
 		}
 
 		signal& operator++(int) {
@@ -757,15 +1314,865 @@ namespace klang {
 		}
 
 		buffer& operator=(const buffer& in) {
-			assert(size == in.size);
+			//assert(size == in.size);
 			memcpy(samples, in.samples, size * sizeof(float));
+			return *this;
+		}
+
+		buffer& operator<<(const signal& in) {
+			*ptr = in;
 			return *this;
 		}
 
 		const float* data() const { return samples; }
 	};
 
+    struct Graph;
+	struct GraphPtr;
+
+    /// Templates supporting common audio functionality
+	namespace Generic {
+
+        /// Audio input object
+		template<typename SIGNAL>
+		struct Input {
+            virtual ~Input() { }
+			SIGNAL in = { 0.f };
+
+			// retrieve current input
+			virtual const SIGNAL& input() const { return in; }
+
+			// feedback input (include pre-processing, if any)
+			virtual void operator<<(const SIGNAL& source) { in = source; input(); }
+			virtual void input(const SIGNAL& source) { in = source; input(); }
+
+		protected:
+			// preprocess input (default: none)
+			virtual void input() { }
+		};
+
+		/// Audio output object
+		template<typename SIGNAL>
+		struct Output {
+			SIGNAL out = { 0.f };
+
+			// returns previous output (without processing)
+			virtual const SIGNAL& output() const { return out; }
+			
+			// pass output to destination (with processing)
+			template<typename TYPE>
+			TYPE& operator>>(TYPE& destination) { process(); return destination = out; }
+
+			// returns output (with processing)
+			virtual operator const SIGNAL&() { process(); return out; } // return processed output
+			virtual operator const SIGNAL&() const { return out; } // return last output
+
+			// arithmetic operations produce copies
+			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + (other); }
+			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * (other); }
+			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - (other); }
+			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / (other); }
+
+		protected:
+			// signal processing
+			virtual void process() = 0;
+		};
+
+		//template<typename TYPE> inline signal operator+(TYPE other, Output& output) { return signal(output) + other; }
+		//template<typename TYPE> inline signal operator*(TYPE other, Output& output) { return signal(output) * other; }
+		//template<typename TYPE> inline signal operator-(TYPE other, Output& output) { return signal(other) - signal(output); }
+		//template<typename TYPE> inline signal operator/(TYPE other, Output& output) { return signal(other) / signal(output); }
+
+		// in-place arithmetic operations (CHECK: can these just be SIGNAL?)
+		template<typename SIGNAL> inline SIGNAL operator+(float other, Output<SIGNAL>& output) { return SIGNAL(output) + other; }
+		template<typename SIGNAL> inline SIGNAL operator*(float other, Output<SIGNAL>& output) { return SIGNAL(output) * other; }
+		template<typename SIGNAL> inline SIGNAL operator-(float other, Output<SIGNAL>& output) { return SIGNAL(other) - SIGNAL(output); }
+		template<typename SIGNAL> inline SIGNAL operator/(float other, Output<SIGNAL>& output) { return SIGNAL(other) / SIGNAL(output); }
+
+		template<typename SIGNAL> inline SIGNAL operator+(Output<SIGNAL>& output, float other) { return SIGNAL(output) + other; }
+		template<typename SIGNAL> inline SIGNAL operator*(Output<SIGNAL>& output, float other) { return SIGNAL(output) * other; }
+		template<typename SIGNAL> inline SIGNAL operator-(Output<SIGNAL>& output, float other) { return SIGNAL(output) - other; }
+		template<typename SIGNAL> inline SIGNAL operator/(Output<SIGNAL>& output, float other) { return SIGNAL(output) / other; }
+
+		//inline signal operator+(Output& other, Output& output) { return signal(output) + signal(other); }
+		//inline signal operator*(Output& other, Output& output) { return signal(output) * signal(other); }
+		//inline signal operator-(Output& other, Output& output) { return signal(other) - signal(output); }
+		//inline signal operator/(Output& other, Output& output) { return signal(other) / signal(output); }
+
+        /// Signal generator object (output only)
+		template<typename SIGNAL> 
+		struct Generator : public Output<SIGNAL> { 
+			using Output<SIGNAL>::out;
+
+			// inline parameter(s) support
+			template<typename... params>
+			Output<SIGNAL>& operator()(params... p) {
+				set(p...); return *this;
+			}
+
+			using Output<SIGNAL>::operator>>;
+			using Output<SIGNAL>::process;
+			operator const SIGNAL& () override { process(); return out; } // return processed output		
+			operator const SIGNAL& () const override { return out; } // return last output		
+
+		protected:
+			// overrideable parameter setting (up to 8 parameters)
+            /// @cond
+			virtual void set(param) { };
+			virtual void set(relative) { }; // relative alternative
+			virtual void set(param, param) { };
+			virtual void set(param, relative) { }; // relative alternative
+			virtual void set(param, param, param) { };
+			virtual void set(param, param, relative) { }; // relative alternative
+			virtual void set(param, param, param, param) { };
+			virtual void set(param, param, param, relative) { }; // relative alternative
+			virtual void set(param, param, param, param, param) { };
+			virtual void set(param, param, param, param, relative) { }; // relative alternative
+			virtual void set(param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, relative) { }; // relative alternative
+			virtual void set(param, param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param, relative) { }; // relative alternative
+			virtual void set(param, param, param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param, param, relative) { }; // relative alternative
+            /// @endcond
+		};
+
+        /// Signal modifier object (input-output)
+		template<typename SIGNAL>
+		struct Modifier : public Input<SIGNAL>, public Output<SIGNAL> { 
+			using Input<SIGNAL>::in;
+			using Output<SIGNAL>::out;
+            
+            virtual ~Modifier() { }
+
+			// signal processing (input-output)
+			operator const SIGNAL&() override { process(); return out; } // return processed output
+			operator const SIGNAL&() const override { return out; } // return last output
+
+			using Input<SIGNAL>::input;
+			virtual void process() override { out = in; } // default to pass-through
+
+			// inline parameter(s) support
+			template<typename... params>
+			Modifier<SIGNAL>& operator()(params... p) {
+				set(p...); return *this;
+			}
+		protected:
+			// overrideable parameter setting (up to 8 parameters)
+            /// @cond
+			virtual void set(param) { };
+			virtual void set(param, param) { };
+			virtual void set(param, param, param) { };
+			virtual void set(param, param, param, param) { };
+			virtual void set(param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param, param, param) { };
+            /// @endcond
+		};
+
+		/// Applies a function to a signal (input-output)
+		template<typename SIGNAL, typename... Args>
+		struct Function : public Generic::Modifier<SIGNAL> {
+            virtual ~Function() { }
+            
+			using Modifier<SIGNAL>::in;
+			using Modifier<SIGNAL>::out;
+
+			operator SIGNAL() { 
+				if (function)
+					return evaluate();
+				process();
+				return out; 
+			};
+			operator param() { 
+				if(function)
+					return evaluate(); 
+				return 2.f;
+			}
+            
+            /// @cond
+            // Helper to combine hash values
+            template <typename T>
+            inline void hash_combine(std::size_t& seed, const T& value) const {
+                std::hash<T> hasher;
+                seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+            }
+
+            // Recursive function to hash each element of a tuple
+            template <typename Tuple, std::size_t Index = 0>
+            std::size_t hash_tuple(const Tuple& tuple) const {
+                if constexpr (Index < std::tuple_size<Tuple>::value) {
+                    std::size_t seed = hash_tuple<Tuple, Index + 1>(tuple);
+                    hash_combine(seed, std::get<Index>(tuple));
+                    return seed;
+                } else {
+                    return 0;
+                }
+            }
+            
+            operator void*() { return this; }
+            uint64_t hash() const { return hash_tuple(tail(inputs)); }
+            /// @endcond
+		
+			std::function<float(Args...)> function;
+
+			static constexpr unsigned int ARGS = sizeof...(Args);
+            unsigned int args() const { return ARGS; }
+            
+			std::tuple<Args...> inputs;
+
+			// Helper function to extract the tail of a tuple
+			template <typename First, typename... Rest>
+			std::tuple<Rest...> tail(const std::tuple<First, Rest...>& t) const {
+				return std::apply( [](const First&, const Rest&... rest) { return std::make_tuple(rest...); },t);
+			}
+
+			template<typename FunctionPtr>
+			Function() : function(nullptr) { }
+
+            template<typename FunctionPtr>
+			Function(FunctionPtr function)
+				: function(std::forward<FunctionPtr>(function)) {}
+            
+            template<typename FunctionPtr, typename... OtherArgs>
+            Function(FunctionPtr function, OtherArgs... args)
+                : function(std::forward<FunctionPtr>(function)) {
+                    with(args...);
+                }
+            
+            void input() override {
+                std::get<0>(inputs) = in.value;
+            }
+            
+            // get the first argument
+            template <typename First, typename... Rest>
+            First first(First first, Rest...) { return first; }
+
+			// Function call operator to invoke the stored callable
+            template<typename... FuncArgs>
+			Function<SIGNAL,Args...>& operator()(const FuncArgs&... args) {
+                if constexpr (ARGS > 1 && sizeof...(FuncArgs) == 1){
+                    in = first(args...);
+                    std::get<0>(inputs) = in.value;
+                    return *this;
+                } else if constexpr (ARGS == sizeof...(FuncArgs)){
+                    in = first(args...);
+                    inputs = std::tuple<Args...>(args...);
+                    return *this;
+                } else if constexpr (sizeof...(FuncArgs) == (ARGS - 1)){
+                    inputs = std::tuple<Args...>(in.value, args...);
+                    return *this;
+                } else {
+                    in = first(args...);
+                    std::get<0>(inputs) = in.value;
+                    return *this;
+                }
+			}
+
+			// Function call operator to invoke the stored callable
+			template<typename... FuncArgs>
+			const float operator()(const FuncArgs&... args) const {
+				signal in = this->in;
+				std::tuple<Args...> inputs = this->inputs;
+
+				// configure inputs
+				if constexpr (ARGS > 1 && sizeof...(FuncArgs) == 1) {
+					in = first(args...);
+					std::get<0>(inputs) = in.value;
+				} else if constexpr (ARGS == sizeof...(FuncArgs)) {
+					in = first(args...);
+					inputs = std::tuple<Args...>(args...);
+				} else if constexpr (sizeof...(FuncArgs) == (ARGS - 1)) {
+					inputs = std::tuple<Args...>(in.value, args...);
+				} else {
+					in = first(args...);
+					std::get<0>(inputs) = in.value;
+				}
+
+				// return outputs
+				if constexpr (ARGS > 1)
+					return std::apply(function, inputs);
+				else
+					return function(in);
+			}
+            
+            template<typename... FuncArgs>
+            Function<SIGNAL,Args...>& with(FuncArgs... args){
+                static_assert(sizeof...(FuncArgs) == (ARGS - 1), "with() arguments must have all but first argument.");
+                inputs = std::tuple<Args...>(in.value, args...);
+                    
+                return *this;
+            }
+
+			signal evaluate() const {
+				if (!function)
+					return 0.f;
+                if constexpr (ARGS > 1)
+					return std::apply(function, inputs);
+                else
+					return function(in);
+			}
+
+			virtual void process() override {
+				out = evaluate();
+			}
+           
+            klang::Graph& operator>>(klang::Graph& graph);
+			klang::GraphPtr& operator>>(klang::GraphPtr& graph);
+        };
+    
+        // deduction guide for functions
+        template <typename... Args>
+        Function(float(*)(Args...)) -> Function<signal, Args...>;
+
+		template <typename... Args>
+		Function() -> Function<signal, Args...>;
+
+        /// A line graph plotter
+		template<int SIZE>
+		struct Graph {
+			virtual ~Graph() { };
+
+			size_t capacity() const { return SIZE; }
+
+			struct Series;
+
+            /// A data point
+			struct Point {
+				double x, y;
+				bool valid() const { return !::isnan(x) && !::isinf(x) && !::isnan(y); } // NB: y can be +/- inf
+
+				Series& operator>>(Series& series);
+			};
+
+			struct Axis;
+
+            /// Data series
+			struct Series : public Array<Point, SIZE + 1>, Input<signal> {
+				virtual ~Series() { }
+
+				void* function = nullptr;
+				uint64_t hash = 0;
+
+				using Array = Array<Point, SIZE + 1>;
+				using Array::add;
+				using Array::count;
+				using Array::items;
+
+				void add(double y) {
+					add({ (double)Array::size(), y });
+				}
+
+				template<typename SIGNAL, typename... Args>
+				void plot(Generic::Function<SIGNAL, Args...>& f, const Axis& x_axis) {
+					constexpr int size = SIZE > 1024 ? 1024 : SIZE;
+
+					if (function != (void*)f || hash != f.hash()) {
+						clear();
+						function = (void*)f;
+						hash = f.hash();
+						double x = 0;
+						const double dx = x_axis.range() / size;
+						for (int i = 0; i <= size; i++) {
+							x = x_axis.min + i * dx;
+							add({ x, (double)(signal)f(x) });
+						}
+					}
+				}
+
+				template<typename RETURN, typename ARG>
+				void plot(RETURN(*f)(ARG), const Axis& x_axis) {
+					constexpr int size = SIZE > 1024 ? 1024 : SIZE;
+
+					if (function != (void*)f) {
+						clear();
+						function = (void*)f;
+						hash = 0;
+						double x = 0;
+						const double dx = x_axis.range() / size;
+						for (int i = 0; i <= size; i++) {
+							x = x_axis.min + i * dx;
+							add({ x, (double)(signal)f((float)x) });
+						}
+					}
+				}
+
+				bool operator==(const Series& in) const {
+					if (count != in.count) return false;
+					for (unsigned int i = 0; i < count; i++)
+						if (items[i].x != in.items[i].x || items[i].y != in.items[i].y)
+							return false;
+					return true;
+				}
+
+				bool operator!=(const Series& in) const {
+					return !operator==(in);
+				}
+
+				void clear() {
+					function = nullptr;
+					Array::clear();
+				}
+
+				using Input::input;
+				void input() override {
+					add(in);
+				}
+			};
+
+            /// Graph axis
+			struct Axis {
+				double min = 0, max = 0;
+				bool valid() const { return max != min; }
+				double range() const { return max - min; }
+				bool contains(double value) const { return value >= min && value <= max; }
+				void clear() { min = max = 0; }
+
+				void from(const Series& series, double Point::* axis) {
+					if (!series.count) return;
+					int points = 0;
+					for (unsigned int p = 0; p < series.count; p++) {
+						const Point& pt = series[p];
+						if (pt.valid() && !::isinf(pt.*axis)) {
+							if (!points || pt.*axis < min) min = pt.*axis;
+							if (!points || pt.*axis > max) max = pt.*axis;
+							points++;
+						}
+					}
+					if (std::abs(max) < 0.0000000001) max = 0;
+					if (std::abs(min) < 0.0000000001) min = 0;
+					if (std::abs(max) > 1000000000.0) max = 0;
+					if (std::abs(min) > 1000000000.0) min = 0;
+					if (min > max) max = min = 0;
+				}
+			};
+
+            /// Graph axes (x/y)
+			struct Axes {
+				Axis x, y;
+				bool valid() const { return x.valid() && y.valid(); }
+				void clear() { x = { 0,0 }; y = { 0,0 }; }
+				bool contains(const Point& pt) const { return x.contains(pt.x) && y.contains(pt.y); }
+			};
+
+			void clear() {
+				dirty = true;
+				axes.clear();
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					data[s].clear();
+				data.clear();
+			}
+
+            /// @cond
+			bool isActive() const {
+				if (data.count)
+					return true;
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					if (data[s].count)
+						return true;
+				return false;
+			}
+            /// @endcond
+
+            /// Graph data
+			struct Data : public Array<Series, GRAPH_SERIES> {
+				using Array<Series, GRAPH_SERIES>::items;
+
+				Series* find(void* function) {
+					for (int s = 0; s < GRAPH_SERIES; s++)
+						if (this->operator[](s).function == function)
+							return &items[s];
+					return nullptr;
+				}
+			};
+
+			Graph& operator()(double min, double max) {
+				dirty = true;
+				axes.x.min = min; axes.x.max = max;
+				return *this;
+			}
+
+			Graph::Series& operator[](int index) {
+				dirty = true;
+				return data[index];
+			}
+
+			const Graph::Series& operator[](int index) const {
+				return data[index];
+			}
+
+			Graph& operator()(double x_min, double x_max, double y_min, double y_max) {
+				dirty = true;
+				axes.x.min = x_min; axes.x.max = x_max;
+				axes.y.min = y_min; axes.y.max = y_max;
+				return *this;
+			}
+
+			operator Series& () {
+				dirty = true;
+				return data[0];
+			}
+
+            /// Plot the given Function
+			template<typename SIGNAL, typename... Args>
+			void plot(Generic::Function<SIGNAL, Args...>& function) {
+				Graph::Series* series = Graph::data.find((void*)function);
+				if (!series)
+					series = Graph::data.add();
+				if (series) {
+					dirty = true;
+					if (!axes.x.valid())
+						axes.x = { -1, 1 };
+					series->plot(function, axes.x);
+				}
+			}
+
+            /// Plot the given function of x
+			template<typename TYPE>
+			void plot(TYPE(*function)(TYPE)) {
+				Graph::Series* series = Graph::data.find((void*)function);
+				if (!series)
+					series = Graph::data.add();
+				if (series) {
+					dirty = true;
+					if (!axes.x.valid())
+						axes.x = { -1, 1 };
+					series->plot(function, axes.x);
+				}
+			}
+
+            /// Plot the given function for x plus additional arguments
+			template<typename FUNCTION, typename... VALUES>
+			void plot(FUNCTION f, VALUES... values) {
+				thread_local static Function fun(f);
+				Graph::Series* series = Graph::data.find((void*)fun);
+				if (!series)
+					series = Graph::data.add();
+				if (series) {
+					dirty = true;
+					if (!axes.x.valid())
+						axes.x = { -1, 1 };
+					series->plot(fun.with(values...), axes.x);
+				}
+			}
+
+            /// Add a data point (incrementing x)
+			template<typename TYPE>
+			void add(TYPE y) { data[0].add(y); dirty = true; }
+            /// Add a data point
+			void add(const Point pt) { data[0].add(pt); dirty = true; }
+
+            /// Add a data point (incrementing x)
+			template<typename TYPE>
+			Graph& operator+=(TYPE y) { add(y); return *this; }
+            /// Add a data point
+			Graph& operator+=(const Point pt) { add(pt); return *this; }
+
+            /// Plot the given function of x
+			template<typename TYPE>
+			Graph& operator=(TYPE(*function)(TYPE)) {
+				plot(function);
+				return *this;
+			}
+
+            /// Plot the given data points
+			Graph& operator=(std::initializer_list<Point> values) {
+				clear(); return operator+=(values);
+			}
+
+            /// Plot the given data points
+			Graph& operator+=(std::initializer_list<Point> values) {
+				for (const auto& value : values)
+					add(value);
+				return *this;
+			}
+
+            /// Plot the given function for x plus additional arguments
+			template<typename... Args> Graph& operator<<(Function<Args...>& function) {
+				plot(function.with());
+				return *this;
+			}
+
+			template<typename TYPE> Graph& operator<<(TYPE& in) { add(in); return *this; } // with processing
+			template<typename TYPE> Graph& operator<<(const TYPE& in) { add(in); return *this; } // without/after processing
+
+			// returns the user-defined axes
+			const Axes& getAxes() const { return axes; }
+
+			// calculates axes based on data
+			void getAxes(Axes& axes) const {
+				if (!axes.x.valid()) {
+					axes.x.clear();
+					for (int s = 0; s < GRAPH_SERIES; s++)
+						axes.x.from(data[s], &Point::x);
+					if (!axes.y.valid() && axes.y.max != 0)
+						axes.y.min = 0;
+				}
+				if (!axes.y.valid()) {
+					axes.y.clear();
+					for (int s = 0; s < GRAPH_SERIES; s++)
+						axes.y.from(data[s], &Point::y);
+					if (!axes.y.valid() && axes.y.max != 0)
+						axes.y.min = 0;
+				}
+			}
+
+			const Data& getData() const { return data; }
+			bool isDirty() const { return dirty; }
+			void setDirty(bool dirty) { Graph::dirty = dirty; }
+
+			void truncate(unsigned int count) {
+				if (count < data.count)
+					data.count = count;
+
+				for (int s = 0; s < GRAPH_SERIES; s++)
+					if (count < data[s].count)
+						data[s].count = count;
+			}
+
+		protected:
+			Axes axes;
+			Data data;
+			bool dirty = false;
+		};
+
+		template<int SIZE>
+		inline typename Graph<SIZE>::Series& Graph<SIZE>::Point::operator>>(Graph<SIZE>::Series& series) {
+			series.add(*this);
+			return series;
+		}
+
+        /// Audio oscillator object (output)
+		template<typename SIGNAL>
+		struct Oscillator : public Generator<SIGNAL> {
+		protected:
+			Phase increment;				// phase increment (per sample, in seconds or samples)
+			Phase position = 0;				// phase position (in radians or wavetable size)
+		public:
+			Frequency frequency = 1000.f;	// fundamental frequency of oscillator (in Hz)
+			Phase offset = 0;				// phase offset (in radians - e.g. for modulation)
+
+            virtual ~Oscillator() { }
+			virtual void reset() { position = 0; }
+
+			using Generator<SIGNAL>::set;
+			virtual void set(param frequency) {
+				Oscillator::frequency = frequency;
+				increment = frequency * 2.f * pi.f / fs;
+			}
+
+			virtual void set(param frequency, param phase) {
+				position = phase;
+				set(frequency);
+			}
+
+			virtual void set(param frequency, relative phase) {
+				set(frequency);
+				set(phase);
+			}
+
+			virtual void set(relative phase) {
+				offset = phase * (2 * pi);
+			}
+		};
+	}
+
+    /// Audio input object (mono)
+	struct Input : Generic::Input<signal> { };
+    /// Audio output object (mono)
+	struct Output : Generic::Output<signal> { };
+    /// Signal generator object (mono)
+	struct Generator : Generic::Generator<signal> { };
+    /// Signal modifier object (mono input-output)
+	struct Modifier : public Generic::Modifier<signal> { };
+    /// Audio oscillator object  (mono output)
+	struct Oscillator : Generic::Oscillator<signal> { };
+
+    /// @cond
+	template <typename TYPE, typename SIGNAL>
+	using GeneratorOrModifier = typename std::conditional<std::is_base_of<Generator, TYPE>::value, Generic::Generator<SIGNAL>,
+								typename std::conditional<std::is_base_of<Modifier, TYPE>::value, Generic::Modifier<SIGNAL>, void>::type>::type;
+    /// @endcond
+
+    /// A parallel bank of multiple audio objects
+	template<typename TYPE, int COUNT>
+	struct Bank : public GeneratorOrModifier<TYPE, signals<COUNT>> {
+		using GeneratorOrModifier<TYPE, signals<COUNT>>::in;
+		using GeneratorOrModifier<TYPE, signals<COUNT>>::out;
+
+		TYPE items[COUNT];
+
+		TYPE& operator[](int index) { return items[index]; }
+		const TYPE& operator[](int index) const { return items[index]; }
+
+		template<typename... Args>
+		void set(Args... args) {
+			for (int n = 0; n < COUNT; n++)
+				items[n].set(args...);
+		}
+
+		void input() override {
+			for (int n = 0; n < COUNT; n++)
+				in[n] >> items[n];
+		}
+
+		void process() override {
+			for (int n = 0; n < COUNT; n++)
+				items[n] >> out[n];
+		}
+	};
+	
+	/// Applies a function to a signal (input-output)
+	template<typename... Args>
+	struct Function : public Generic::Function<signal, Args...> {
+
+		//static float Identity(float x) { return x; }
+
+		//Function() : Generic::Function<signal, float>([](float x) -> float { return x; }) { }
+
+		Function() : Generic::Function<signal, Args...>(nullptr) { }
+
+		Function(std::function<float(Args...)> function) : Generic::Function<signal, Args...>(function) { }
+
+		using Generic::Function<signal, Args...>::operator>>;
+	};
+
+    /// A line graph plotter
+	struct Graph : public Generic::Graph<GRAPH_SIZE> { 
+		using Generic::Graph<GRAPH_SIZE>::operator=;
+		using Generic::Graph<GRAPH_SIZE>::plot;
+
+		/// Plot the given function for x plus additional arguments
+		template<typename... Args> Graph& operator<<(Function<Args...>& function) {
+			plot(function.with());
+			return *this;
+		}
+	};
+
+    /// @cond
+	struct GraphPtr {
+		std::unique_ptr<Graph> ptr;
+
+		void check() {
+			if (ptr.get() == nullptr)
+				ptr = std::make_unique<Graph>();
+		}
+
+		Graph* operator->() {	check(); return (klang::Graph*)ptr.get();	}
+		operator Graph* () {	check(); return (klang::Graph*)ptr.get();	}
+		operator Graph& () {	check(); return *(klang::Graph*)ptr.get(); }
+
+		void clear() { check(); ptr->clear(); }
+		bool isActive() const { return ptr ? ptr->isActive() : false; }
+
+		Graph& operator()(double min, double max) {	check(); return (Graph&)ptr->operator()(min, max);	}
+
+		Graph::Series& operator[](int index) { check(); return ptr->operator[](index); }
+		const Graph::Series& operator[](int index) const { static const Graph::Series none = Graph::Series(); return ptr ? ptr->operator[](index) : none; }
+
+		Graph& operator()(double x_min, double x_max, double y_min, double y_max) { check(); return (Graph&)ptr->operator()(x_min, x_max, y_min, y_max); }
+
+		operator Graph::Series& () { check(); return ptr->operator Graph::Series& (); }
+
+		template<typename SIGNAL, typename... Args>
+		void plot(Generic::Function<SIGNAL, Args...>& function) { check(); ((Graph*)(ptr.get()))->plot(function); }
+
+		template<typename TYPE> 
+		void plot(TYPE(*function)(TYPE)) { check(); ((Graph*)(ptr.get()))->plot(function); }
+
+		template<typename FUNCTION, typename... VALUES> 
+		void plot(FUNCTION f, VALUES... values) { check(); ((Graph*)(ptr.get()))->plot(f, values...); }
+
+		template<typename TYPE> void add(TYPE y) { check(); ptr->add(y); }
+		void add(const Graph::Point pt) { check(); ptr->add(pt); }
+
+		template<typename TYPE> Graph& operator+=(TYPE y) { check(); return ptr->operator+=(y); }
+		Graph& operator+=(const Graph::Point pt) { check(); return (Graph&)ptr->operator+=(pt); }
+
+		template<typename TYPE> Graph& operator=(TYPE(*function)(TYPE)) { check(); return (Graph&)ptr->operator=(function); }
+
+		Graph& operator=(std::initializer_list<Graph::Point> values) { check(); return (Graph&)ptr->operator=(values); }
+		Graph& operator+=(std::initializer_list<Graph::Point> values) { check(); return (Graph&)ptr->operator+=(values); }
+
+		template<typename... Args> Graph& operator<<(Generic::Function<Args...>& function) { plot(function.with()); return *this; }
+		template<typename TYPE> Graph& operator<<(TYPE& in) { add(in); return *this; } // with processing
+		template<typename TYPE> Graph& operator<<(const TYPE& in) { add(in); return *this; } // without/after processing
+
+		const Graph::Axes& getAxes() const { static const Graph::Axes none; return ptr ? ptr->getAxes() : none; }
+		void getAxes(Graph::Axes& axes) { check(); ptr->getAxes(axes); }
+
+		const Graph::Data& getData() { check(); return ptr->getData(); }
+		bool isDirty() const { return ptr ? ptr->isDirty() : false; }
+		void setDirty(bool dirty) { if (ptr) ptr->setDirty(dirty); }
+
+		void truncate(unsigned int count) { check(); ptr->truncate(count); }
+	};
+    /// @endcond
+	
+
+
+    // deduction guide for functions
+    template <typename... Args>
+    Function(float(*)(Args...)) -> Function<Args...>;
+
+	//// deduction guide for functions
+	//Function() -> Function<float>;
+
+	THREAD_LOCAL static GraphPtr graph;
+
+	template<typename SIGNAL, typename... Args>
+	inline GraphPtr& Generic::Function<SIGNAL, Args...>::operator>>(klang::GraphPtr& graph) {
+		graph.plot(*this);
+		return graph;
+	}
+
+	template<typename TYPE>
+	static GraphPtr& operator>>(TYPE(*function)(TYPE), klang::GraphPtr& graph) {
+		graph->plot(function);
+		return graph;
+	}
+
+	template<typename SIGNAL, typename... Args>
+	inline Graph& Generic::Function<SIGNAL, Args...>::operator>>(klang::Graph& graph) {
+		graph.plot(*this);
+		return graph;
+	}
+
+	template<typename TYPE>
+	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {
+		graph.plot(function);
+		return graph;
+	}
+
+	// syntax equivalence: a = b is the same as b >> a
+	inline signal& signal::operator=(Output& b) { 
+		b >> *this;
+		return *this;
+	}
+
+	// supports summing of multiple outputs
+	inline signal& signal::operator+=(Output& in) { // e.g. out += osc;
+		value += signal(in);
+		return *this;
+	}
+
+    /// Square root function (audio object)
+	inline static Function<float> sqrt(SQRTF);
+    /// Absolute/rectify function (audio object)
+	inline static Function<float> abs(FABS);
+    /// Square function (audio object)
+	inline static Function<float> sqr([](float x) -> float { return x * x; });
+    /// Cube function (audio object)
+	inline static Function<float> cube([](float x) -> float { return x * x * x; });
+
+	#define sqrt klang::sqrt // avoid conflict with std::sqrt
+	#define abs klang::abs   // avoid conflict with std::abs
+
+    /// Debug text output
 	struct Console : public Text<16384> {
+		static std::mutex _lock;
+		THREAD_LOCAL static Text<16384> last;
 		int length = 0;
 
 		void clear() {
@@ -774,148 +2181,226 @@ namespace klang {
 		}
 
 		Console& operator=(const char* in) {
+			std::lock_guard<std::mutex> lock(_lock);
 			length = std::min(capacity(), (int)strlen(in));
 			memcpy(string, in, length);
 			string[length] = 0;
 			return *this;
 		}
 
+		Console& operator=(const Console& in) {
+			std::lock_guard<std::mutex> lock(_lock);
+			length = std::min(capacity(), in.length);
+			memcpy(string, in.string, length);
+			string[length] = 0;
+			return *this;
+		}
+
 		Console& operator+=(const char* in) {
+			std::lock_guard<std::mutex> lock(_lock);
 			const int len = std::max(0, std::min(capacity() - length, (int)strlen(in)));
 			memcpy(&string[length], in, len);
 			length += len;
 			string[length] = 0;
+			memcpy(&last, in, len);
+			last.string[len] = 0;
 			return *this;
 		}
+
+		bool hasText() const {
+			return length != 0;
+		}
+
+		int getText(char* buffer) {
+			//if (!length) return 0;
+			std::lock_guard<std::mutex> lock(_lock);
+			const int _length = length;
+			memcpy(buffer, string, length);
+			buffer[length] = 0; // null terminator
+			clear();
+			return _length;
+		}
 	};
 
-	struct Debug {
-		buffer* buffer = nullptr;
-		Console console;
+	inline THREAD_LOCAL Text<16384> Console::last;
 
-		enum Content {
-			Empty = 0,
-			Notes = 1,
-			Effect = 2,
-			Synth = 3,
-		} content = Empty;
+#define PROFILE(func, ...) debug.print("%-16s = %fns\n", #func "(" #__VA_ARGS__ ")", debug.profile(1000, func, __VA_ARGS__));
 
-		void attach(float* buffer, int size) {
-				Debug::buffer = new klang::buffer(buffer, size);
-		}
+    /// The Klang debug interface
+	struct Debug : Input {
 
-		void detach() {
-			klang::buffer* tmp = buffer;
-			buffer = nullptr;
-			delete tmp;
-		}
+        /// Audio buffer for debug output
+		struct Buffer : private buffer {
+			using buffer::clear;
+			using buffer::rewind;
+			using buffer::operator++;
+			using buffer::operator signal&;
 
-		struct Session {
-			Session(float* buffer, int size, Content content);
-			~Session();
+			Buffer() : buffer(16384) { }
 
-			bool isActive() const;
-			const float* buffer() const;
+			enum Content {
+				Empty = 0,
+				Notes = 1,
+				Effect = 2,
+				Synth = 3,
+			} content = Empty;
+
+			/*		void attach(float* buffer, int size) {
+						Debug::buffer = new klang::buffer(buffer, size);
+					}
+
+					void detach() {
+						klang::buffer* tmp = buffer;
+						buffer = nullptr;
+						delete tmp;
+					}*/
+
+			bool active = false;
+			int used = 0;
+
+			const float* get() {
+				if (active) {
+					active = false;
+					return data();
+				}
+				else {
+					return nullptr;
+				}
+			}
+
+			Buffer& operator+=(const signal in) {
+				active = true;
+				buffer::operator+=(in);
+				return *this;
+			}
+
+			template<typename TYPE>
+			Buffer& operator+=(TYPE& in) {
+				active = true;
+				buffer::operator+=(in);
+				return *this;
+			}
+
+			signal& operator>>(signal& destination) const {
+				destination << *ptr;
+				return destination;
+			}
+
+			operator const signal& () const {
+				return *ptr;
+			}
 		};
 
+		THREAD_LOCAL static Buffer buffer; // support multiple threads/instances
+
+        /// Debug console output
+		Console console;
+
+		template <typename Func, typename... Args>
+		inline static double profile(Func func, Args... args) {
+			using namespace std::chrono;
+
+			auto start = high_resolution_clock::now();
+			func(args...);
+			auto end = high_resolution_clock::now();
+
+			auto duration = duration_cast<nanoseconds>(end - start).count();
+			return (double)duration;
+		}
+
+		template <typename Func, typename... Args>
+		inline static double profile(int times, Func func, Args... args) {
+			double sum = 0;
+			while (times--) {
+				sum += profile(func, args...);
+			}
+			return sum / 1000000.0;
+		}
+
+        /// @cond
+		struct Session {
+			Session(float*, int size, Buffer::Content content) {
+				//if (buffer) {
+					//debug.attach(buffer, size);
+				if (buffer.content != Buffer::Notes)
+					buffer.clear(size);
+				buffer.content = content;
+				buffer.rewind();
+				//}
+			}
+			~Session() {
+				//debug.detach();
+			}
+
+			bool hasAudio() const {
+				return buffer.active;
+			}
+			const float* getAudio() const {
+				return buffer.get();
+			}
+		};
+        /// @endcond
+
 		void print(const char* format, ...) {
-			static char buffer[1024] = { 0 };
-			va_list args;                     // Initialize the variadic argument list
-			va_start(args, format);           // Start variadic argument processing
-			vsnprintf(buffer, 1024, format, args);  // Safely format the string into the buffer
-			va_end(args);                     // Clean up the variadic argument list
-			console += buffer;
-		}
-
-		bool active = false;
-		int used = 0;
-
-		const float* audio() {
-			if (buffer && active) {
-				active = false;
-				return buffer->data();
-			} else {
-				return nullptr;
+			if (console.length < 10000) {
+				THREAD_LOCAL static char string[1024] = { 0 };
+				string[0] = 0;
+				va_list args;                     // Initialize the variadic argument list
+				va_start(args, format);           // Start variadic argument processing
+				vsnprintf(string, 1024, format, args);  // Safely format the string into the buffer
+				va_end(args);                     // Clean up the variadic argument list
+				console += string;
 			}
 		}
 
-		Console* text() {
-			if (console.length) {
-				return &console;
-			} else {
-				return nullptr;
+		void printOnce(const char* format, ...) {
+			if (console.length < 1024) {
+				THREAD_LOCAL static char string[1024] = { 0 };
+				string[0] = 0;
+				va_list args;                     // Initialize the variadic argument list
+				va_start(args, format);           // Start variadic argument processing
+				vsnprintf(string, 1024, format, args);  // Safely format the string into the buffer
+				va_end(args);                     // Clean up the variadic argument list
+
+				if (console.last != string)
+					console += string;
 			}
 		}
 
-		signal& operator++(int) {
-			static signal none;
-			if (buffer)
-				return buffer->operator++(1);
-			return none;
+		bool hasText() const {
+			return console.hasText();
+		}
+
+		int getText(char* buffer) {
+			return console.getText(buffer);
+		}
+
+		operator const signal& () const {
+			return buffer.operator const klang::signal & ();
+		}
+
+		using Input::input;
+		void input() override {
+			buffer += in;
 		}
 	};
 
-	static Debug& operator>>(const signal& source, Debug& debug) {
-		//(signal&)debug += source;
-		if (debug.buffer) {
-			(*debug.buffer) += source;
-			debug.active = true;
-		}
-		return debug;
-	}
+	//inline static Debug::Buffer& operator>>(const signal source, Debug& debug) {
+	//	return debug.buffer += source;
+	//}
 
-	template<typename TYPE>
-	static Debug& operator>>(TYPE& source, Debug& debug) {
-		//(signal&)debug += source;
-		if (debug.buffer) {
-			(*debug.buffer) += source;
-			debug.active = true;
-		}
-		return debug;
-	}
+	//template<typename TYPE>
+	//inline static Debug::Buffer& operator>>(TYPE& source, Debug& debug) {
+	//	return debug.buffer += source;
+	//}
 
-	thread_local static Debug debug;
+	static Debug debug;
+	inline THREAD_LOCAL Debug::Buffer Debug::buffer; //
+	inline std::mutex Console::_lock;
 
-	inline Debug::Session::Session(float* buffer, int size, Debug::Content content) { 
-		if (buffer) {
-			debug.attach(buffer, size);
-			if (debug.content != Debug::Notes)
-				debug.buffer->clear(size);
-			debug.content = content;
-			debug.buffer->rewind();
-		}
-	}
+#define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
 
-	inline Debug::Session::~Session() { debug.detach(); }
-
-	inline bool Debug::Session::isActive() const {
-		return debug.active;
-	}
-
-	inline const float* Debug::Session::buffer() const {
-		return debug.audio();
-	}
-
-	template<typename TYPE>
-	struct FunctionType {
-		using Type = TYPE;
-		using Pointer = TYPE(*)(TYPE);
-
-		FunctionType(Pointer f) : function(f) { }
-		Pointer function;
-	};
-
-	template<typename T>
-	static FunctionType<T> Function(T(*func)(T)) {
-		return FunctionType<T>(func);
-	}
-
-#ifndef GRAPH_SIZE
-#define GRAPH_SIZE 44100
-#endif
-
-	#define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
-
+    /// @cond
 	template <typename TYPE>
 	struct Result {
 		TYPE* y = nullptr;
@@ -937,7 +2422,9 @@ namespace klang {
 
 		TYPE& operator++(int) { i++; return *++y; }
 	};
+    /// @endcond
 
+    /// Lookup table object
 	template<typename TYPE, int SIZE>
 	struct Table : public Array<TYPE, SIZE> {
 		typedef Array<TYPE, SIZE> Array;
@@ -969,393 +2456,56 @@ namespace klang {
 			}
 		}
 
-
-
 		Table(std::initializer_list<TYPE> values) {
 			for (TYPE value : values)
 				add(value);
 		}
+
+		using Array::operator[];
+		TYPE operator[](float index) {
+			if (index < 0) return Array::items[0];
+			else if (index >= (SIZE - 1)) return Array::items[SIZE - 1];
+			else {
+				const float x = std::floor(index);
+				const int i = int(x);
+				const float dx = index - x;
+				const float dy = Array::items[i + 1] - Array::items[i];
+				return Array::items[i] + dx * dy;
+			}
+		}
 	};
 
-	struct Graph {
-		struct Point { 
-			double x, y; 
-			bool valid() const { return !isnan(x) && !isinf(x) && !isnan(y); } // NB: y can be +/- inf
-		};
-
-		struct Axis;
-
-		struct Series : public Array<Point, GRAPH_SIZE+1> {
-			void* function = nullptr;
-			using Array::add;
-			void add(double y) {
-				add({ (double)Array::size(), y });
-			}
-
-			template<class TYPE>
-			void plot(TYPE f, const Axis& x_axis) {
-				if (function != (void*)f) {
-					clear();
-					function = (void*)f;
-					double x = 0;
-					const double dx = x_axis.range() / GRAPH_SIZE;
-					for (int i = 0; i <= GRAPH_SIZE; i++) {
-						x = x_axis.min + i * dx;
-						add({ x, (double)f(x) });
-					}
-				}
-			}
-		};
-
-		struct Axis {
-			double min = 0, max = 0;
-			bool valid() const { return max != min; }
-			double range() const { return max - min; }
-			bool contains(double value) const { return value >= min && value <= max; }
-			void clear() { min = max = 0; }
-
-			void from(const Series& series, double Point::*axis) {
-				if (!series.count) return;
-				int points = 0;
-				for (unsigned int p = 0; p < series.count; p++) {
-					const Point& pt = series[p];
-					if (pt.valid() && !isinf(pt.*axis)) {
-						if (!points || pt.*axis < min) min = pt.*axis;
-						if (!points || pt.*axis > max) max = pt.*axis;
-						points++;
-					}
-				}
-				if (abs(max) < 0.0000000001) max = 0;
-				if (abs(min) < 0.0000000001) min = 0;
-				if (abs(max) > 1000000000.0) max = 0;
-				if (abs(min) > 1000000000.0) min = 0;
-				if (min > max) max = min = 0;
-			}
-		};
-
-		struct Axes {
-			Axis x,y;
-			bool valid() const { return x.valid() && y.valid(); }
-			void clear() { x = { 0,0 }; y = { 0,0 }; }
-			bool contains(const Point& pt) const { return x.contains(pt.x) && y.contains(pt.y); }
-		};
-
-		void clear() {
-			dirty = true;
-			axes.clear();
-			for (int s = 0; s < 16; s++)
-				data[s].clear();
-			data.clear();
-		}
-
-		bool isActive() const {
-			if (data.count)
-				return true;
-			for (int s = 0; s < 16; s++)
-				if (data[s].count)
-					return true;
-			return false;
-		}
-
-		struct Data : public Array<Series, 16> {
-			Series* find(void* function) {
-				for (int s = 0; s < 16; s++)
-					if (operator[](s).function == function)
-						return &items[s];
-				return nullptr;
-			}
-		};
-
-		Graph& operator()(double min, double max) {
-			dirty = true;
-			axes.x.min = min; axes.x.max = max;
-			return *this;
-		}
-
-		Graph::Series& operator[](int index) {
-			dirty = true;
-			return data[index];
-		}
-
-		const Graph::Series& operator[](int index) const {
-			return data[index];
-		}
-
-		Graph& operator()(double x_min, double x_max, double y_min, double y_max) {
-			dirty = true;
-			axes.x.min = x_min; axes.x.max = x_max;
-			axes.y.min = y_min; axes.y.max = y_max;
-			return *this;
-		}
-
-		operator Series& () {
-			dirty = true;
-			return data[0];
-		}
-
-		template<class TYPE>
-		void plot(TYPE function) {
-			Graph::Series* series = Graph::data.find((void*)function);
-			if(!series)
-				series = Graph::data.add();
-			if (series) {
-				dirty = true;
-				if (!axes.x.valid())
-					axes.x = { -1, 1 };
-				series->plot(function, axes.x);
-			}
-		}
-
-		template<typename TYPE>
-		void add(TYPE y) {			data[0].add(y); }
-		void add(const Point pt) {	data[0].add(pt); }
-
-		template<typename TYPE>
-		Graph& operator+=(TYPE y) {			data[0].add(y); return *this;  }
-		Graph& operator+=(const Point pt) { data[0].add(pt); return *this; }
-
-		template<typename TYPE>
-		Graph& operator=(TYPE(*function)(TYPE)) {
-			plot(function);
-			return *this;
-		}
-
-		Graph& operator=(std::initializer_list<Point> values) {
-			clear(); return operator+=(values);
-		}
-
-		Graph& operator+=(std::initializer_list<Point> values) {
-			for (const auto& value : values)
-				add(value);
-			return *this;
-		}
-
-		//Graph& operator=(std::initializer_list<double> values) {
-		//	clear(); return operator+=(values);
-		//}
-
-		//Graph& operator+=(std::initializer_list<double> values) {
-		//	for (const auto& value : values)
-		//		add(value);
-		//	return *this;
-		//}
-
-		// returns the user-defined axes
-		const Axes& getAxes() const { return axes; }
-
-		// calculates axes based on data
-		void getAxes(Axes& axes) const { 
-			if (!axes.x.valid()) {
-				axes.x.clear();
-				for (int s = 0; s < 16; s++)
-					axes.x.from(data[s], &Point::x);
-				if (!axes.y.valid() && axes.y.max != 0)
-					axes.y.min = 0;
-			}
-			if (!axes.y.valid()) {
-				axes.y.clear();
-				for (int s = 0; s < 16; s++)
-					axes.y.from(data[s], &Point::y);
-				if (!axes.y.valid() && axes.y.max != 0)
-					axes.y.min = 0;
-			}
-		}
-		
-		const Data& getData() const { return data; }
-		bool isDirty() const { return dirty; }
-		void setDirty(bool dirty) { Graph::dirty = dirty; }
-
-	protected:
-		Axes axes;
-		Data data;
-		bool dirty = false;
-	};
-
-	template<typename TYPE>
-	static Graph& operator>>(TYPE(*function)(TYPE), Graph& graph) {
-		graph.plot(function);
-		return graph;
-	}
-
-	template<typename TYPE>
-	static Graph::Series& operator>>(TYPE y, Graph::Series& series) {
-		series.add(y);
-		return series;
-	}
-
-	static Graph::Series& operator>>(Graph::Point pt, Graph::Series& series) {
-		series.add(pt);
-		return series;
-	}
-
-	//template<typename TYPE>
-	//static Graph& operator>>(TYPE y, Graph& graph) {
-	//	if(graph.getSeries())
-	//		graph[0].add(y);
-	//	return series;
-	//}
-
-	thread_local static Graph graph;
-
-	namespace Generic {
-		template<typename SIGNAL>
-		struct Input {
-			SIGNAL in = 0.f;
-
-			virtual SIGNAL& input() { return in; }
-			virtual const SIGNAL& input() const { return in; }
-			//virtual void operator<<(float source) { input(source); }
-			virtual void operator<<(const SIGNAL& source) { input(source); }
-			virtual void input(const SIGNAL& source) { in = source; }
-		};
-
-		template<typename SIGNAL>
-		inline Input<SIGNAL>& operator>>(SIGNAL source, Input<SIGNAL>& input) {
-			input << source;
-			return input;
-		}
-
-		template<typename SIGNAL>
-		struct Output {
-			SIGNAL out = 0;
-
-			virtual SIGNAL& output() { return out; }
-			virtual const SIGNAL& output() const { return out; }
-			virtual SIGNAL& operator>>(SIGNAL& destination) { process(); return destination = out; }
-
-			virtual operator SIGNAL() { process(); return out; }
-
-			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / SIGNAL(other); }
-
-
-			virtual void process() = 0; // { out = 0.f; }
-		};
-
-		
-		template<typename SIGNAL> inline SIGNAL operator+(float other, Output<SIGNAL>& output) { return SIGNAL(output) + other; }
-		template<typename SIGNAL> inline SIGNAL operator*(float other, Output<SIGNAL>& output) { return SIGNAL(output) * other; }
-		template<typename SIGNAL> inline SIGNAL operator-(float other, Output<SIGNAL>& output) { return SIGNAL(other) - SIGNAL(output); }
-		template<typename SIGNAL> inline SIGNAL operator/(float other, Output<SIGNAL>& output) { return SIGNAL(other) / SIGNAL(output); }
-
-		template<typename SIGNAL> inline SIGNAL operator+(Output<SIGNAL>& output, float other) { return SIGNAL(output) + other; }
-		template<typename SIGNAL> inline SIGNAL operator*(Output<SIGNAL>& output, float other) { return SIGNAL(output) * other; }
-		template<typename SIGNAL> inline SIGNAL operator-(Output<SIGNAL>& output, float other) { return SIGNAL(output) - other; }
-		template<typename SIGNAL> inline SIGNAL operator/(Output<SIGNAL>& output, float other) { return SIGNAL(output) / other; }
-
-		template<typename SIGNAL> 
-		struct Generator : public Output<SIGNAL> { 
-			// inline parameter(s) support
-			template<typename... params>
-			Output<SIGNAL>& operator()(params... p) {
-				set(p...); return *this;
-			}
-
-		protected:
-			virtual void set(param p) { };
-			virtual void set(relative p) { };
-			virtual void set(param p1, param p2) { };
-			virtual void set(param p1, relative p2) { };
-			virtual void set(param p1, param p2, param p3) { };
-			virtual void set(param p1, param p2, param p3, param p4) { };
-		};
-
-		template<typename SIGNAL>
-		struct Modifier : public Input<SIGNAL>, public Output<SIGNAL> { 
-			using Input<SIGNAL>::in;
-			using Output<SIGNAL>::out;
-
-			// signal processing (input-output)
-			operator SIGNAL() override { process(); return out; } // return last output
-			virtual void process() override { out = in; }
-
-			// inline parameter(s) support
-			template<typename... params>
-			Modifier<SIGNAL>& operator()(params... p) {
-				set(p...); return *this;
-			}
-		protected:
-			virtual void set(param p) { };
-			virtual void set(param p1, param p2) { };
-			virtual void set(param p1, param p2, param p3) { };
-			virtual void set(param p1, param p2, param p3, param p4) { };
-		};
-
-		template<typename SIGNAL>
-		struct Oscillator : public Generator<SIGNAL> {
-		protected:
-			Phase increment;				// phase increment (per sample, in seconds or samples)
-			Phase position = 0;				// phase position (in radians or wavetable size)
-		public:
-			Frequency frequency = 1000.f;	// fundamental frequency of oscillator (in Hz)
-			Phase offset = 0;				// phase offset (in radians - e.g. for modulation)
-
-			//Oscillator(float size = 2 * pi) : increment(1.f, size) { }
-
-			virtual void reset() { position = 0; }
-
-			virtual void set(param frequency) {
-				Oscillator::frequency = frequency;
-				increment = frequency * 2.f * pi.f / fs;
-			}
-
-			virtual void set(param frequency, param phase) {
-				position = phase;
-				set(frequency);
-			}
-
-			virtual void set(param frequency, relative phase) {
-				set(frequency);
-				set(phase);
-			}
-
-			virtual void set(relative phase) {
-				offset = phase * (2 * pi);
-			}
-		};
-	}
-
-	struct Input : Generic::Input<signal> { };
-	struct Output : Generic::Output<signal> { };
-	struct Generator : Generic::Generator<signal> { };
-	struct Modifier : Generic::Modifier<signal> { };
-	struct Oscillator : Generic::Oscillator<signal> { };
-
-	inline signal& signal::operator=(Output& b) { 
-		b >> *this;
-		return *this;
-	}
-
-	inline signal& signal::operator+=(Output& in) { // e.g. out += osc;
-		value += signal(in);
-		return *this;
-	}
-
-	inline Modifier& operator>>(signal input, Modifier& modifier) {
-		modifier << input;
-		return modifier;
-	}
-
+    /// Audio delay object
 	template<int SIZE>
-	class Delay : public Modifier {
-	protected:
-		float buffer[SIZE];
-		const int size = SIZE;
+	struct Delay : public Modifier {
+		using Modifier::in;
+		using Modifier::out;
+
+		buffer buffer;
 		float time = 1;
 		int position = 0;
-	public:
-		Delay() { clear(); }
+
+		Delay() : buffer(SIZE + 1, 0) { clear(); }
 
 		void clear() {
-			memset(buffer, 0, sizeof(float) * SIZE);
+			buffer.clear();
 		}
 
-		void operator<<(const signal& input) override {
-			buffer[position] = Delay::in = input;
-			if(++position == SIZE)
+		//void operator<<(const signal& input) override {
+		void input() override { 
+			buffer++ = in;
+			position++;
+			if (buffer.finished()) {
+				buffer.rewind();
 				position = 0;
+			}
+		}
+
+		signal tap(int delay) const {
+			int read = (position - 1) - delay;
+			if (read < 0)
+				read += SIZE;
+			return buffer[read];
 		}
 
 		signal tap(float delay) const {
@@ -1363,47 +2513,54 @@ namespace klang {
 			if (read < 0.f)
 				read += SIZE;
 
-			float f = floor(read);
+			const float f = floor(read);
 			delay = read - f;
 
-			int i = (int)read;
-			int j = (i == (SIZE - 1)) ? 0 : (i + 1);
+			const int i = (int)read;
+			const int j = (i == (SIZE - 1)) ? 0 : (i + 1);
 			
 			return buffer[i] * (1.f - delay) + buffer[j] * delay;
 		}
 
-		signal& operator>>(signal& destination) override {
-			return destination = out = tap(time);
-		}
-
-		virtual operator signal () override {
-			return out = tap(time);
-		}
-
 		virtual void process() override {
-			operator<<(in);
 			out = tap(time);
 		}
 
 		virtual void set(param delay) override {
-			assert(delay <= SIZE);
-			Delay::time = delay;
+			Delay::time = delay <= SIZE ? (float)delay : SIZE;
 		}
+
+		template<typename TIME>
+		signal operator()(TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>)
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
+		}
+
+		template<typename TIME>
+		signal operator()(const TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>) 
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
+		}
+
+		unsigned int max() const { return SIZE; }
 	};
 
-	class Noise : public Generator {
-		void process() {
-			out = (rand() / (float)RAND_MAX) * 2.f - 1.f;
-		}
-	};
-
+    /// Wavetable-based oscillator
 	class Wavetable : public Oscillator {
 		using Oscillator::set;
 	protected:
 		buffer buffer;
 		const int size;
 	public:
-		Wavetable(int size = 2048) : buffer(size), size(size)/*, Oscillator((float)size)*/ { }
+		Wavetable(int size = 2048) : buffer(size), size(size) { }
 
 		template<typename TYPE>
 		Wavetable(TYPE oscillator, int size = 2048) : buffer(size), size(size) {
@@ -1448,33 +2605,15 @@ namespace klang {
 		}
 	};
 
-	class Osc : public Oscillator {
-		std::unique_ptr<Oscillator> osc;
-
-	public:
-		template<typename TYPE>
-		void set(TYPE) {
-			osc = new TYPE();
-			osc->set(frequency, position);
-		}
-
-		void set(param frequency) {
-			Oscillator::set(frequency);
-			osc->set(frequency);
-		}
-
-		void set(param frequency, param phase) {
-			Oscillator::set(frequency, phase);
-			osc->set(frequency, phase);
-		}
-	};
-
-	// Models a changing value (e.g. amplitude) over time (in seconds) using breakpoints (time, value)
+	/// Envelope object
 	class Envelope : public Generator {
 		using Generator::set;
 
 	public:
-		// Abstract envelope ramp type (override to support different point-to-point trajectories)
+
+		struct Follower;
+
+		/// Abstract envelope ramp type
 		struct Ramp : public Generator {
 			float target;
 			float rate;
@@ -1525,7 +2664,7 @@ namespace klang {
 			void process() override { /* do nothing -> only process on ++ */ }
 		};
 
-		// Default (linear) ramp implementation
+		/// Linear envelope ramp (default)
 		struct Linear : public Ramp {
 
 			// Return the current output and process the next
@@ -1553,10 +2692,12 @@ namespace klang {
 			}
 		};
 
+        /// Envelope stage
 		enum Stage { Sustain, Release, Off };
+        /// Envelope mode
 		enum Mode { Time, Rate };
 
-		// Envelope point type
+		/// Envelope point (x,y)
 		struct Point {
 			float x, y;
 
@@ -1566,6 +2707,7 @@ namespace klang {
 			Point(T1 x, T2 y) : x(float(x)), y(float(y)) { }
 		};
 
+        /// @cond
 		// Linked-list of points (for inline initialisation)
 		struct Points : public Point {
 			Points(float x, float y) {
@@ -1592,8 +2734,9 @@ namespace klang {
 
 			Points* next;
 		};
+        /// @endcond
 
-		// Envelope loop (between two points)
+		/// Envelope loop
 		struct Loop {
 			Loop(int from = -1, int to = -1) : start(from), end(to) {}
 
@@ -1669,7 +2812,7 @@ namespace klang {
 		}
 
 		// Retrieve value at time (in seconds)
-		signal at(param time) {
+		signal at(param time) const {
 			if (points.empty()) return 0;
 			Point last = { 0, points[0].y };
 			for (const Point& point : points) {
@@ -1683,10 +2826,6 @@ namespace klang {
 			}
 			return points.back().y;
 		}
-
-		//void set(param time) override {
-		//	setTargetValue(at(time), 1.f);
-		//}
         
 		// Resets the envelope loop
 		void resetLoop(){
@@ -1708,6 +2847,8 @@ namespace klang {
 		virtual void release(float time, float level = 0.f){
 			stage = Release;
 			setTarget({ time, level }, 0);
+			//ramp->setTime(time);
+			//ramp->setTarget(0.f);
 		}
 
 		// Returns true if the envelope has finished (is off)
@@ -1820,7 +2961,7 @@ namespace klang {
 		void setTargetTime(const Point& point, float time = 0.0) {
 			this->time = time;
 			ramp->setTarget(point.y);
-			ramp->setRate(fabsf(point.y - ramp->out) / ((point.x - time) * fs));
+			ramp->setRate(abs(point.y - ramp->out) / ((point.x - time) * fs));
 		}
 
 		void setTargetRate(const Point& point, float rate = 0.0) {
@@ -1843,7 +2984,11 @@ namespace klang {
 		std::shared_ptr<Ramp> ramp;
 	};
 
+    /// Attack-Decay-Sustain-Release Envelope
 	struct ADSR : public Envelope {
+	private:
+		using Envelope::Follower;
+	public:
 		param A, D, S, R;
 
 		enum Mode { Time, Rate } mode = Time;
@@ -1874,6 +3019,7 @@ namespace klang {
 		}
 	};
 
+    /// FM operator
 	template<class OSCILLATOR>
 	struct Operator : public OSCILLATOR, public Input {
 		Envelope env;
@@ -1903,49 +3049,40 @@ namespace klang {
 			OSCILLATOR::process();
 			OSCILLATOR::out *= env++ * amp;
 		}
+
+		inline Operator& operator>>(Operator& carrier) {
+			carrier << *this;
+			return carrier;
+		}
 	};
 
 	template<class OSCILLATOR>
-	inline signal operator>>(klang::signal modulator, Operator<OSCILLATOR>& carrier) {
+	inline const signal& operator>>(klang::signal modulator, Operator<OSCILLATOR>& carrier) {
 		carrier << modulator;
 		return carrier;
 	}
 
-	inline param* param::convert(Type to) {
-		switch (type() > to) {
-			case Type::Frequency > Type::Pitch:
-				return new Pitch(log2(value / 440) * 12 + 69);
+    /// Base class for UI / MIDI controll
+	struct Controller {
+	protected:
+		virtual event control(int index, float value) { };
+		virtual event preset(int index) { };
+		virtual event midi(int status, int byte1, int byte2) { };
+	public:
+		virtual void onControl(int index, float value) { control(index, value); };
+		virtual void onPreset(int index) { preset(index); };
+		virtual void onMIDI(int status, int byte1, int byte2) { midi(status, byte1, byte2); }
+	};
 
-				case Type::Pitch > Type::Frequency:
-					return new Frequency(440 * pow(2, (value - 69) / 12));
-
-				default:
-					return nullptr;
-		}
-	}
-
-	inline void param::convert(const param& from, param& to) {
-		switch (from.type() > to.type())
-		{
-			case Type::Frequency > Type::Pitch:
-				to.value = log2f(from.value / 440) * 12 + 69;
-				break;
-				case Type::Pitch > Type::Frequency:
-					to.value = (float)(440 * pow(2, (from.value - 69) / 12));
-					break;
-		}
-	}
-
-	struct Plugin {
+    /// Base class for mini-plugin
+	struct Plugin : public Controller {
 		virtual ~Plugin() { }
-
-		virtual void onParameter(int index, float value) { };
-		virtual void onPreset(int index) { };
 
 		Controls controls;
 		Presets presets;
 	};
 
+    /// Effect mini-plugin (mono)
 	struct Effect : public Plugin, public Modifier {
 		virtual ~Effect() { }
 
@@ -1953,31 +3090,32 @@ namespace klang {
 		virtual void process() { out = in; }
 		virtual void process(buffer buffer) {
 			prepare();
-			while (buffer) {
+			while (!buffer.finished()) {
 				input(buffer);
 				process();
 				buffer++ = out;
-				debug++;
+				debug.buffer++;
 			}
 		}
 	};
 
+    /// Base class for synthesiser notes
 	template<class SYNTH>
-	class NoteBase {
+	class NoteBase : public Controller {
 		SYNTH* synth;
 
 		class Controls {
 			klang::Controls* controls = nullptr;
 		public:
 			Controls& operator=(klang::Controls& controls) { Controls::controls = &controls; return *this; }
-			float& operator[](int index) { return controls->operator[](index); }
+			signal& operator[](int index) { return controls->operator[](index).operator signal&(); }
+			const signal& operator[](int index) const { return controls->operator[](index).operator const signal&(); }
 			unsigned int size() { return controls ? controls->size() : 0; }
 		};
 
 	protected:
 		virtual event on(Pitch p, Velocity v) { }
 		virtual event off(Velocity v = 0) { stage = Off; }
-		virtual event control(int controller, int value) { };
 
 		SYNTH* getSynth() { return synth; }
 	public:
@@ -2025,21 +3163,21 @@ namespace klang {
 
 		enum Stage { Onset, Sustain, Release, Off } stage = Off;
 
-		virtual void controlChange(int controller, int value) { control(controller, value); };
+		virtual void controlChange(int controller, int value) { midi(0xB0, controller, value); };
 	};
 
 	struct Synth;
 
-	// base class for individual synthesiser notes/voices
+	/// Synthesiser note (mono)
 	struct Note : public NoteBase<Synth>, public Generator {
 		virtual void prepare() { }
 		virtual void process() override = 0;
 		virtual bool process(buffer buffer) {
 			prepare();
-			while (buffer) {
+			while (!buffer.finished()) {
 				process();
 				buffer++ = out;
-				debug++;
+				debug.buffer++;
 			}
 			return !finished();
 		}
@@ -2048,6 +3186,7 @@ namespace klang {
 		}
 	};
 
+    /// Synthesiser note array
 	template<class SYNTH, class NOTE = Note>
 	struct Notes : Array<NOTE*, 128> {
 		SYNTH* synth;
@@ -2113,7 +3252,7 @@ namespace klang {
 		}
 	};
 
-	// base class for synthesiser mini-plugins
+	/// Synthesiser object (mono)
 	struct Synth : public Effect {
 		typedef Note Note;
 
@@ -2122,19 +3261,33 @@ namespace klang {
 		Synth() : notes(this) { }
 		virtual ~Synth() { }
 
-		virtual void presetLoaded(int preset) { }
-		virtual void optionChanged(int param, int item) { }
-		virtual void buttonPressed(int param) { };
+		//virtual void presetLoaded(int preset) { }
+		//virtual void optionChanged(int param, int item) { }
+		//virtual void buttonPressed(int param) { };
 
 		int indexOf(Note* note) const {
 			int index = 0;
 			for (const auto* n : notes.items) {
-				if (note == n) return 
-					index;
+				if (note == n) 
+					return index;
 				index++;
 			}
 			return -1; // not found
 		}
+
+		// pass to synth and notes
+		virtual event onControl(int index, float value) override { 
+			control(index, value);
+			for (unsigned int n = 0; n < notes.count; n++)
+				notes[n]->onControl(index, value);
+		};
+
+		// pass to synth and notes
+		virtual event onPreset(int index) override {
+			preset(index);
+			for (unsigned int n = 0; n < notes.count; n++)
+				notes[n]->onPreset(index);
+		};
 	};
 
 	template<class SYNTH, class NOTE>
@@ -2149,9 +3302,12 @@ namespace klang {
 	namespace Mono { using namespace klang; }
 	namespace mono { using namespace klang; }
 
+    /// Objects supporting stereo audio functionality.
 	namespace Stereo {
+        /// Stereo audio signal
 		typedef signals<2> signal;
 
+        /// Stereo sample frame
 		struct frame {
 			mono::signal& l;
 			mono::signal& r;
@@ -2225,21 +3381,26 @@ namespace klang {
 			}
 		};
 
-		struct Input : Generic::Input<signal> { };
-		struct Output : Generic::Output<signal> { };
-		struct Generator : Generic::Generator<signal> { };
-		struct Modifier : Generic::Modifier<signal> { };
-		struct Oscillator : Generic::Oscillator<signal> { };
+        /// Audio input object (stereo)
+        struct Input : Generic::Input<signal> { virtual ~Input() {} };
+        /// Audio output object (stereo)
+        struct Output : Generic::Output<signal> { virtual ~Output() {} };
+        /// Signal generator object (stereo output)
+        struct Generator : Generic::Generator<signal> { virtual ~Generator() {} };
+        /// Signal modifier object (stereo, input-output)
+        struct Modifier : Generic::Modifier<signal> { virtual ~Modifier() {} };
+        /// Audio oscillator object (stereo, output)
+        struct Oscillator : Generic::Oscillator<signal> { virtual ~Oscillator() {} };
 
+		//inline Modifier& operator>>(signal input, Modifier& modifier) {
+		//	modifier << input;
+		//	return modifier;
+		//}
 
-
-		inline Modifier& operator>>(signal input, Modifier& modifier) {
-			modifier << input;
-			return modifier;
-		}
-
+        /// Stereo audio buffer
 		// interleaved access to non-interleaved stereo buffers
 		struct buffer {
+			typedef Stereo::signal signal;
 			mono::buffer& left, right;
 
 			buffer(const buffer& buffer) : left(buffer.left), right(buffer.right) { rewind(); }
@@ -2247,7 +3408,7 @@ namespace klang {
 
 			operator const signal() const { return { left, right }; }
 			operator frame () {				return { left, right }; }
-			operator bool() const {			return left.operator bool() && right.operator bool(); }
+			bool finished() const {			return left.finished() && right.finished(); }
 			frame operator++(int) {			return { left++, right++ };	}
 
 			frame operator=(const signal& in) {
@@ -2278,6 +3439,10 @@ namespace klang {
 				return { left[index], right[index] };
 			}
 
+			signal operator[](int index) const {
+				return { left[index], right[index] };
+			}
+
 			mono::buffer& channel(int index) {
 				return index == 1 ? right : left;
 			}
@@ -2298,6 +3463,67 @@ namespace klang {
 			}
 		};
 
+        /// Stereo audio object adapter
+		template<class TYPE>
+		struct Bank : klang::Bank<TYPE, 2> { };
+
+        /// Audio delay object (stereo)
+		template<int SIZE>
+		struct Delay : Bank<klang::Delay<SIZE>> { 
+			using Bank<klang::Delay<SIZE>>::items;
+			using Bank<klang::Delay<SIZE>>::in;
+			using Bank<klang::Delay<SIZE>>::out;
+
+			void clear() {
+				items[0].clear();
+				items[1].clear();
+			}
+
+			klang::Delay<SIZE> &l, &r;
+			Delay<SIZE>() : l(items[0]), r(items[1]) { }
+
+			signal tap(int delay) const {
+				int read = (items[0].position - 1) - delay;
+				if (read < 0)
+					read += SIZE;
+				return { items[0].buffer[read], items[1].buffer[read] };
+			}
+
+			signal tap(float delay) const {
+				float read = (float)(items[0].position - 1) - delay;
+				if (read < 0.f)
+					read += SIZE;
+
+				const float f = floor(read);
+				delay = read - f;
+
+				const int i = (int)read;
+				const int j = (i == (SIZE - 1)) ? 0 : (i + 1);
+
+				return { items[0].buffer[i] * (1.f - delay) + items[0].buffer[j] * delay,
+						 items[1].buffer[i] * (1.f - delay) + items[1].buffer[j] * delay };
+			}
+
+			virtual void process() override {
+				out = tap(items[0].time);
+			}
+
+			template<typename TIME>
+			signal operator()(const TIME& delay) {
+				if constexpr (std::is_integral_v<TIME>)
+					return tap((int)delay);
+				else if constexpr (std::is_floating_point_v<TIME>)
+					return tap((float)delay);
+				else if constexpr (std::is_same_v<TIME, signal>) // stereo signal (use for l/r delay times)
+					return { items[0].tap(delay.l), items[1].tap(delay.r) };
+				else
+					return tap((klang::signal)delay); // else treat as single signal
+			}
+
+			unsigned int max() const { return SIZE; }
+		};
+
+        /// Stereo effect mini-plugin
 		struct Effect : public Plugin, public Modifier {
 			virtual ~Effect() { }
 
@@ -2305,18 +3531,18 @@ namespace klang {
 			virtual void process() { out = in; };
 			virtual void process(Stereo::buffer buffer) {
 				prepare();
-				while (buffer) {
+				while (!buffer.finished()) {
 					input(buffer);
 					process();
 					buffer++ = out;
-					debug++;
+					debug.buffer++;
 				}
 			}
 		};
 
 		struct Synth;
 
-		// stereo note object
+		/// Base class for stereo synthesiser note
 		struct Note : public NoteBase<Synth>, public Generator { 
 			//virtual signal output() { return 0; };
 
@@ -2324,7 +3550,7 @@ namespace klang {
 			virtual void process() override = 0;
 			virtual bool process(Stereo::buffer buffer) {
 				prepare();
-				while (buffer) {
+				while (!buffer.finished()) {
 					process();
 					buffer++ = out;
 				}
@@ -2336,10 +3562,11 @@ namespace klang {
 			}
 		};
 
-		// base class for stereo synthesiser mini-plugins
+		/// Synthesier mini-plugin (stereo)
 		struct Synth : public Effect {
 			typedef Stereo::Note Note;
 
+            /// Synthesiser note array (stereo)
 			struct Notes : klang::Notes<Synth, Note> {
 				using klang::Notes<Synth, Note>::Notes;
 			} notes;
@@ -2363,14 +3590,43 @@ namespace klang {
 		};
 	}
 
+    /// @cond
 	namespace stereo {
 		using namespace Stereo;
 	}
+    /// @endcond
 
-	namespace Oscillators {
+	/// Feed audio source to destination (with source processing)
+	template<typename SOURCE, typename DESTINATION>
+	inline DESTINATION& operator>>(SOURCE& source, DESTINATION& destination) {
+        if constexpr (is_derived_from<Input, DESTINATION>())
+			destination.input(source); // input to destination (enables overriding of <<)
+		else if constexpr (is_derived_from<Stereo::Input, DESTINATION>())
+			destination.input(source); // input to destination (enables overriding of <<)
+		else
+			destination << source; // copy to destination
+		return destination;
+	}
+
+    /// Feed audio source to destination (no source processing)
+	template<typename SOURCE, typename DESTINATION>
+	inline DESTINATION& operator>>(const SOURCE& source, DESTINATION& destination) {
+        if constexpr (is_derived_from<Input, DESTINATION>())
+			destination.input(source); // input to destination (enables overriding of <<)
+		else if constexpr (is_derived_from<Stereo::Input, DESTINATION>())
+			destination.input(source); // input to destination (enables overriding of <<)
+		else
+			destination << source; // copy to destination
+		return destination;
+	}
+
+    /// Common audio generators / oscillators.
+	namespace Generators {
 		using namespace klang;
 
+        /// Simple oscillators
 		namespace Basic {
+            /// Sine wave oscillator
 			struct Sine : public Oscillator {
 				void process() {
 					out = sin(position + offset);
@@ -2378,22 +3634,63 @@ namespace klang {
 				}
 			};
 
+            /// Saw wave oscillator (aliased)
 			struct Saw : public Oscillator {
 				void process() {
-					out = position * (1.f / pi) - 1;
+					out = position * pi.inv - 1.f;
 					position += increment;
+				}
+			};
+
+            /// Triangle wave oscillator (aliased)
+			struct Triangle : public Oscillator {
+				void process() {
+					out = abs(2.f * position * pi.inv - 2) - 1.f;
+					position += increment;
+				}
+			};
+
+            /// Square wave oscillator (aliased)
+			struct Square : public Oscillator {
+				void process() {
+					out = position > pi ? 1.f : -1.f;
+					position += increment;
+				}
+			};
+
+            /// Pulse wave oscillator (aliased)
+			struct Pulse : public Oscillator {
+				param duty = 0.5f;
+
+				using Oscillator::set;
+				void set(param frequency, param phase, param duty) {
+					set(frequency, phase);
+					Pulse::duty = duty;
+				}
+
+				void process() {
+					out = position > (duty * pi) ? 1.f : -1.f;
+					position += increment;
+				}
+			};
+
+            /// White noise generator
+			struct Noise : public Generator {
+				void process() {
+					out = rand() * 2.f/(const float)RAND_MAX - 1.f;
 				}
 			};
 		};
 
+        /// Performance-optimised oscillators
 		namespace Fast {
-			constexpr float pi = 3.1415926535897932384626433832795f;
 			constexpr float twoPi = float(2.0 * 3.1415926535897932384626433832795);
 			constexpr float twoPiInv = float(1.0 / twoPi);
 
+            /// Phase increment (optimised)
 			struct Increment {
 				// represent phase delta using full range of int32
-				// (integer math, no conditionals, free oversampling)
+                // (integer math, no conditionals, free oversampling)
 				signed int amount = 0;
 
 				void reset() { amount = 0; }
@@ -2417,6 +3714,7 @@ namespace klang {
 				}
 			};
 
+            /// Oscillator phase (optimised)
 			struct Phase {
 				// represent phase using full range of uint32
 				// (integer math, no conditionals, free oversampling)
@@ -2522,13 +3820,13 @@ namespace klang {
 				//}
 			};
 
-			// sin approximation [-pi/2, pi/2] using odd minimax polynomial (Robin Green)
+			/// sin approximation [-pi/2, pi/2] using odd minimax polynomial (Robin Green)
 			inline static float polysin(float x) {
 				const float x2 = x * x;
 				return (((-0.00018542f * x2 + 0.0083143f) * x2 - 0.16666f) * x2 + 1.0f) * x;
 			}
 
-			// fast sine (based on V2/Farbrausch; using polysin)
+			/// fast sine (based on V2/Farbrausch; using polysin)
 			inline static float fastsin(float x)
 			{
 				// Range reduction to [0, 2pi]
@@ -2546,7 +3844,7 @@ namespace klang {
 				return polysin(x);
 			}
 
-			// fast sine (using polysin and integer math)
+			/// fast sine (using polysin and integer math)
 			inline static float fastsinp(unsigned int p)
 			{
 				// Range reduction to [0, 2pi]
@@ -2564,6 +3862,7 @@ namespace klang {
 				return polysin(x);
 			}
 
+            /// Sine wave oscillator (band-limited, optimised)
 			struct Sine : public Oscillator {
 				void reset() override {
 					Sine::position = Oscillator::position = 0;
@@ -2571,7 +3870,6 @@ namespace klang {
 					set(Oscillator::frequency, 0.f);
 				}
 
-				// set the frequency
 				void set(param frequency) override {
 					if (frequency != Oscillator::frequency) {
 						Oscillator::frequency = frequency;
@@ -2604,7 +3902,13 @@ namespace klang {
 				Fast::Phase position, offset;
 			};
 
+            /// Oscillator State Machine
 			struct OSM {
+				using Waveform = float(OSM::*)();
+				const Waveform waveform;
+
+				OSM(Waveform waveform) : waveform(waveform) { }
+
 				enum State { // carry:old_up:new_up
 					NewUp = 0b001, NewDown = 0b000,
 					OldUp = 0b010, OldDown = 0b000,
@@ -2624,31 +3928,54 @@ namespace klang {
 				State state;
 				float delta;
 
+				// coeffeficients
+				float f, omf, rcpf, rcpf2, col;
+				float c1,c2;
+
+				param frequency = 0; // cached to optimise updates
+
 				void init() {
 					state = (offset.position - increment.amount) < duty.position ? Up : Down;
+					f = delta;
+					omf = 1.f - f;
+					rcpf2 = 2.f * (rcpf = 1.f / f);
+					col = duty;
+
+					c1 = 1.f / col;
+					c2 = -1.f / (1.0f - col);
 				}
 				
 				void set(param frequency) {
-					//if (frequency != Oscillator::frequency) {
-					//	Oscillator::frequency = frequency;
+					if (OSM::frequency != frequency) {
+						OSM::frequency = frequency;
 						increment.set(frequency);
 						delta = increment;
 						init();
-					//}
+					}
 				}
 
 				void set(param frequency, param phase) {
-					increment.set(frequency);
-					delta = increment;
+					if (OSM::frequency != frequency) {
+						OSM::frequency = frequency;
+						increment.set(frequency);
+						delta = increment;
+					}
 					offset = phase;
 					init();
 				}
 
 				void set(param frequency, param phase, param duty) {
-					increment.set(frequency);
-					delta = increment;
+					if (OSM::frequency != frequency) {
+						OSM::frequency = frequency;
+						increment.set(frequency);
+						delta = increment;
+					}
 					offset = phase;
-					OSM::duty = duty * (2 * pi);
+					setDuty(duty);
+				}
+
+				void setDuty(param duty) {
+					OSM::duty = duty * (2.f * pi);
 					init();
 				}
 
@@ -2666,58 +3993,66 @@ namespace klang {
 					return transition;
 				}
 
-				static float sqr(float x) { return x * x; }
+				inline static float sqr(float x) { return x * x; }
+				inline float output() { return (this->*waveform)(); }
 
-				float output() {
-					const float f = delta;
-					const float omf = 1.f - f;
-					const float rcpf = 1.f / f;
-					const float col = duty;
+				//inline float saw() {
+				//	const float f = delta;
+				//	const float omf = 1.f - f;
+				//	const float rcpf = 1.f / f;
+				//	const float col = duty;
+				//	const float c1 = 1.f / col;
+				//	const float c2 = -1.f / (1.0f - col);
+				//	const float p = offset - col;
+				//	float y = 0.0f;
+				//	// state machine action
+				//	switch (tick()) {
+				//	case Up:		 y = c1 * (p + p - f); break; // average of linear function = just sample in the middle
+				//	case Down:		 y = c2 * (p + p - f); break; // again, average of a linear function
+				//	case UpDown:	 y = rcpf * (c2 * sqr(p) - c1 * sqr(p - f));		  break;
+				//	case DownUp:	 y = -rcpf * (1.f + c2 * sqr(p + omf) - c1 * sqr(p)); break;
+				//	case UpDownUp:	 y = -rcpf * (1.f + c1 * omf * (p + p + omf));		  break;
+				//	case DownUpDown: y = -rcpf * (1.f + c2 * omf * (p + p + omf));		  break;
+				//	default:		 y = -1; // should never happen
+				//	}
+				//	return y + 1.f;
+				//}
 
-					const float c1 = 1.f / col;
-					const float c2 = -1.f / (1.0f - col);
-
-					float p = offset - col;
-					float y = 0.0f;
-
+				float saw() { return saw(offset - col, tick()); }
+				inline float saw(const float p, const State state) const {
 					// state machine action
-					switch (tick())
-					{
-					case Up:
-						// average of linear function = just sample in the middle
-						y = c1 * (p + p - f);
-						break;
-
-					case Down:
-						// again, average of a linear function
-						y = c2 * (p + p - f);
-						break;
-
-					case UpDown:
-						y = rcpf * (c2 * sqr(p) - c1 * sqr(p - f));
-						break;
-
-					case DownUp:
-						y = -rcpf * (1.f + c2 * sqr(p + omf) - c1 * sqr(p));
-						break;
-
-					case UpDownUp:
-						y = -rcpf * (1.f + c1 * omf * (p + p + omf));
-						break;
-
-					case DownUpDown:
-						y = -rcpf * (1.f + c2 * omf * (p + p + omf));
-						break;
-
-					default:
-						assert(false);
+					switch (state) {
+					case Up:		 return c1 * (p + p - f) + 1.f; break; // average of linear function = just sample in the middle
+					case Down:		 return c2 * (p + p - f) + 1.f; break; // again, average of a linear function
+					case UpDown:	 return rcpf * (c2 * sqr(p) - c1 * sqr(p - f)) + 1.f;		   break;
+					case DownUp:	 return -rcpf * (1.f + c2 * sqr(p + omf) - c1 * sqr(p)) + 1.f; break;
+					case UpDownUp:	 return -rcpf * (1.f + c1 * omf * (p + p + omf)) + 1.f;		   break;
+					case DownUpDown: return -rcpf * (1.f + c2 * omf * (p + p + omf)) + 1.f;		   break;
+					default:		 return 0.f; // should never happen
 					}
+				}
 
-					return y + 1.f;
+				float pulse() { return pulse(offset, tick()); }
+				inline float pulse(const float p, const State state) const {
+					// state machine action
+					switch (state) {
+					case Up:		 return 1.f;							break;
+					case Down:		 return -1.f;							break;
+					case UpDown:	 return rcpf2 * (col - p) + 1.f;		break;
+					case DownUp:	 return rcpf2 * p - 1.f;				break;
+					case UpDownUp:	 return rcpf2 * (col - 1.0f) + 1.f;		break;
+					case DownUpDown: return rcpf2 * col - 1.f;				break;
+					default:		 return 0; // should never happen
+					}
 				}
 			};
 
-			struct Saw : public Oscillator {
+            /// @cond
+			struct Osm : public Oscillator {
+				const float _Duty;
+
+				Osm(OSM::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) { osm.setDuty(_Duty); }
+
 				void set(param frequency) {
 					osm.set(frequency);
 				}
@@ -2735,24 +4070,56 @@ namespace klang {
 				}
 
 			protected:
+				using Oscillator::set;
 				OSM osm;
+			};
+            /// @endcond
+
+            /// Saw wave oscillator (band-limited, optimised)
+			struct Saw :	  public Osm {	Saw()	   : Osm(&OSM::saw, 0.f) {}	};
+            /// Triangle wave oscillator (band-limited, optimised)
+			struct Triangle : public Osm {	Triangle() : Osm(&OSM::saw, 1.f) {}	};
+            /// Square wave oscillator (band-limited, optimised)
+			struct Square :	  public Osm {	Square()   : Osm(&OSM::pulse, 1.0f) {} };
+            /// Pulse wave oscillator (band-limited, optimised)
+			struct Pulse :	  public Osm {	Pulse()	   : Osm(&OSM::pulse, 0.5f) {} };
+
+            /// White noise generator (optimised)
+			struct Noise : public Generator {
+				static constexpr unsigned int bias = 0b1000011100000000000000000000000;
+                /// @cond
+				union { unsigned int i; float f; };
+                /// @endcond
+				void process() {
+					i = ((rand() & 0b111111111111111UL) << 1) | bias;
+					out = f - 257.f;
+				}
 			};
 		};
 
+        /// Wavetable-based oscillators
 		namespace Wavetables {
+            /// Sine wave oscillator (wavetable)
 			struct Sine : public Wavetable {
 				Sine() : Wavetable(Basic::Sine()) { }
 			};
 
+            /// Saw wave oscillator (wavetable)
 			struct Saw : public Wavetable {
 				Saw() : Wavetable(Basic::Saw()) { }
 			};
 		}
 	};
 
+    /// Common audio filters.
 	namespace Filters {
-		namespace Basic {
-			struct LPF : public Modifier {
+    
+//		namespace Basic {
+        
+            /// Basic one-pole IIR filter.
+			struct IIR : public Modifier {
+                virtual ~IIR() { }
+                
 				float a, b;
 
 				void set(param coeff) {
@@ -2765,32 +4132,356 @@ namespace klang {
 				}
 			};
 
-			struct HPF : public LPF {
-				void process() {
-					out = (a * in) - (b * out);
-				}
+			/// Single-pole (one-pole, one-zero) First Order Filters
+			namespace OnePole 
+			{
+                /// Abstract filter class
+				struct Filter : Modifier {
+                    virtual ~Filter() { }
+                    
+					float f = 0; 		// cutoff f
+					//float shelf = 1;	// shelving gain
+
+					float /*a0 = 1*/ a1 = 0, b0 = 1, b1 = 0; //coefficients
+
+					float exp0 = 0;
+					//float tan0 = 0;
+					float z = 0;	// filter state
+
+					void reset() {
+						a1 = 0;
+						b0 = 1;
+						b1 = 0;
+						f = 0;
+						z = 0;
+					}
+
+					void set(param f) {
+						if (Filter::f != f) {
+							Filter::f = f;						
+							//tan0 = tanf(0.5f * f * fs.w);
+							init();
+						}
+					}
+
+					virtual void init() = 0;
+
+					void process() {
+						out = b0 * in + b1 * z + a1 * out + DENORMALISE;
+					}
+				};
+
+				/// Low-pass filter (LPF)
+				struct LPF : Filter {
+                    virtual ~LPF() { }
+                    
+					void init() {
+						const float exp0 = expf(-f * fs.w);
+						b0 = 1 - exp0;
+						a1 = exp0;
+					}
+                    
+					void process() {
+						out = b0 * in + a1 * out + DENORMALISE;
+					}
+				};
+
+				/// High-pass filter (HPF)
+				struct HPF : Filter {
+                    virtual ~HPF() { }
+                    
+					void init() {
+						const float exp0 = expf(-f * fs.w);
+						b0 = 0.5f * (1.f + exp0);
+						b1 = -b0;
+						a1 = exp0;
+					}
+				};
 			};
-		}
+
+            /// One-pole Butterworth filter.
+			namespace Butterworth {
+                /// Low-pass filter (LPF).
+				struct LPF : OnePole::Filter {
+                    virtual ~LPF() { }
+                    
+					void init() {
+						const float c = 1.f / tanf(pi * f * fs.inv);
+						constant a0 = { 1.f + c };
+						b0 = a0.inv;  // b0 == b1
+						a1 = (1.f - c) * a0.inv; // = (1-c) / a0
+					}
+					void process() {
+						out = b0 * (in + z) - a1 * out;// +DENORMALISE;
+						z = in;
+					}
+				};
+			};
+
+			/// Transposed Direct Form II Biquadratic Filter
+			namespace Biquad {
+
+                /// Abstract filter class
+				struct Filter : Modifier
+				{
+                    virtual ~Filter() { }
+                    
+					float f = 0; 	// cutoff/centre f
+					float Q = 0;	// Q (resonance)
+
+					float /*a0 = 1*/ a1 = 0, a2 = 0, b0 = 1, b1 = 0, b2 = 0; // coefficients
+
+					float a = 0;		// alpha
+					float cos0 = 1;		// cos(omega)
+					float sin0 = 0;		// sin(omega)
+					float z[2] = { 0 };	// filter state
+
+                    /// Reset filter state
+					void reset() {
+						f = 0;
+						Q = 0;
+						b0 = 1;
+						a1 = a2 = b1 = b2 = 0;
+						a = 0;
+						z[0] = z[1] = 0;
+					}
+
+                    /// Set the filter cutoff (and Q)
+					void set(param f, param Q = root2.inv) {
+						if (Filter::f != f || Filter::Q != Q) {
+							Filter::f = f;
+							Filter::Q = Q;
+
+							const float w = f * fs.w;
+							cos0 = cosf(w);
+							sin0 = sinf(w);
+
+							if (Q < 0.5) Q = 0.5;
+							a = sin0 / (2.f * Q);
+							init();
+						}
+					}
+
+					virtual void init() = 0;
+
+                    /// Apply the biquad filter (Transposed Direct Form II)
+					void process() noexcept {
+						const float z0 = z[0];
+						const float z1 = z[1];
+						const float y = b0 * in + z0;
+						z[0] = b1 * in - a1 * y + z1;
+						z[1] = b2 * in - a2 * y;
+						out = y;
+					}
+				};
+
+				/// Low-pass filter (LPF)
+				struct LPF : Filter {
+                    virtual ~LPF() { }
+                    
+					void init() override {
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+
+						b2 = b0 = a0.inv * (1.f - cos0) * 0.5f;
+						b1 = a0.inv * (1.f - cos0);
+					}
+				};
+
+				typedef LPF HCF; ///< High-cut filter (HCF)
+				typedef LPF HRF; ///< High-reject filter (HRF)
+
+                /// High-pass filter (HPF)
+				struct HPF : Filter {
+                    virtual ~HPF() { }
+                    
+					void init() {
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+
+						b2 = b0 = a0.inv * (1.f + cos0) * 0.5f;
+						b1 = a0.inv * -(1.f + cos0);
+					}
+				};
+
+				typedef HPF LCF; ///< Low-cut filter (LCF)
+				typedef HPF LRF; ///< Low-reject filter (LRF)
+
+				/// Band-pass filter (BPF)
+				struct BPF : Filter {
+
+					enum Gain {
+						ConstantSkirtGain,  ///< Constant Skirt Gain
+						ConstantPeakGain    ///< Constant Peak Gain
+					};
+
+                    /// Set the constant gain mode.
+					BPF& operator=(Gain gain) {
+						init_gain = gain == ConstantSkirtGain ? &BPF::init_skirt : &BPF::init_peak;
+						init();
+						return *this;
+					}
+
+					using Init = void(BPF::*)(void); ///< @internal
+					Init init_gain = &BPF::init_peak; ///< @internal
+					void init() { (this->*init_gain)(); } ///< @internal
+
+					/// @internal
+					void init_skirt() {
+                        // constant skirt gain
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+
+						b0 = a0.inv * sin0 * 0.5f;
+						b1 = 0;
+						b2 = -b0;
+					}
+
+                    /// @internal
+					void init_peak() {
+						// constant peak gain
+						constant a0 = { 1.f + a };
+						a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+
+						b0 = a0.inv * a;
+						b1 = 0;
+						b2 = a0.inv * -a;
+					}
+				};
+
+				/// Band-Reject Filter (BRF)
+				struct BRF : Filter {
+					void init() {
+						constant a0 = { 1.f + a };
+						b1 = a1 = a0.inv * (-2.f * cos0);
+						a2 = a0.inv * (1.f - a);
+						b0 = b2 = a0.inv;
+					}
+				};
+
+				typedef BRF BSF; ///< Band-stop filter (BSF)
+
+				/// All-pass filter (APF)
+				struct APF : Filter {
+					void init() {
+						constant a0 = { 1.f + a };
+						b1 = a1 = a0.inv * (-2.f * cos0);
+						b0 = a2 = a0.inv * (1.f - a);
+						b2 = 1.f;
+					}
+				};
+			}
+//		}
 	}
+
+	/// Envelope follower (Peak / RMS)
+	struct Envelope::Follower : Modifier {
+
+		/// Attack / Release IIR Filter (~Butterworth when attack == release)
+		struct AR : Modifier {
+			param attack = 0;
+			param release = 0;
+
+			param A = 1, R = 1;
+
+			void set(param attack, param release) {
+				if (AR::attack != attack || AR::release != release) {
+					AR::attack = attack;
+					AR::release = release;
+					A = 1.f - (attack == 0.f ? 0.f : expf(-1.0f / (fs * attack)));
+					R = 1.f - (release == 0.f ? 0.f : expf(-1.0f / (fs * release)));
+				}
+			}
+
+			void process() {
+				const float smoothing = in > out ? A : R;
+				(out + smoothing * (in - out)) >> out;
+			}
+		} ar;
+			 	
+		// Peak / RMS Envelope Follower (default; filter-based)
+		Follower() { set(0.01f, 0.1f); }
+		void set(param attack, param release) {
+			ar.set(attack, release);
+		}
+
+		Follower& operator=(klang::Mode mode) {
+			_process = (mode == RMS) ? &Follower::rms : &Follower::peak;
+			return *this;
+		}
+
+		using Process = void(Follower::*)();
+		Process _process = &Follower::rms;
+
+		void process() {	(this->*_process)();	}
+
+		void peak() {	abs(in) >> ar >> out;					}
+		void rms() {	(in * in) >> ar >> sqrt >> out;		}
+
+		/// Window-based envelope follower
+		template<int WINDOW>
+		struct Window : Modifier
+		{
+			AR ar;
+			buffer buffer;
+			double sum = 0; // NB: must be 64-bit to avoid rounding errors
+			static constexpr constant window = { WINDOW };
+
+			Window() : buffer(WINDOW, 0) {
+				set(0.01f, 0.1f);
+			}
+
+			void set(param attack, param release) {
+				ar.set(attack, release);
+			}
+
+			Window& operator=(klang::Mode mode) {
+				_process = (mode == RMS) ? &Window::rms : &Window::mean;
+				return *this;
+			}
+
+			using Process = void(Window::*)();
+			Process _process = &Window::rms;
+
+			void process() { (this->*_process)(); }
+
+			void mean() { 
+				sum -= double(buffer);
+				abs(in) >> buffer;
+				sum += double(buffer++);
+				if (buffer.finished())
+					buffer.rewind();
+				sum * window.inv >> ar >> out;
+			}
+			void rms() {  
+				sum -= double(buffer);
+				(in * in) >> buffer;
+				sum += double(buffer++);
+				if (buffer.finished())
+					buffer.rewind();
+				sum* window.inv >> sqrt >> ar >> out;
+			}
+		};
+	};
 
 	namespace basic {
 		using namespace klang;
 
-		using Oscillators::Basic::Sine;
-		using Oscillators::Basic::Saw;
-
-		using Filters::Basic::LPF;
-		using Filters::Basic::HPF;
+		using namespace Generators::Basic;
+		using namespace Filters;
+		using namespace Filters::Biquad;
 	};
 
 	namespace optimised {
 		using namespace klang;
 
-		using Oscillators::Fast::Sine;
-		using Oscillators::Fast::Saw;
-
-		using Filters::Basic::LPF;
-		using Filters::Basic::HPF;
+		using namespace Generators::Fast;
+		using namespace Filters;
+		using namespace Filters::Biquad;
 	};
 
 	namespace minimal {
