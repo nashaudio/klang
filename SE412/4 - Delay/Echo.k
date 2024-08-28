@@ -20,9 +20,10 @@ struct Echo : Effect {
 
 	// Apply processing (called once per sample)
 	void process() {
-		delay.set(controls[0] * fs);
+		param time = controls[0] * fs;
 		param gain = controls[1];
 		
-		in + (in >> delay) * gain >> out;
+		in >> delay;
+		in + delay(time) * gain >> out;
 	}
 };

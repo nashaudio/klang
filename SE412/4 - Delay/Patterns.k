@@ -23,17 +23,21 @@ struct Patterns : Effect {
 		in >> delay;
 		
 		param times[3][3] = {
-			{ 0.5f, 1.0f, 1.5f },	{ 0.25f,0.5f, 1.0f },	{ 0.5f, .75f, 1.0f },
+			{ 0.5f, 1.0f, 1.5f },	
+			{ 0.25f,0.5f, 1.0f },	
+			{ 0.5f, .75f, 1.0f },
 		};
 		param gains[3][3] = {
-			{ .75f, 0.5f, .25f },	{ .25f, 0.5f, .75f },	{ .25f, 0.5f, .25f },
+			{ .75f, 0.5f, .25f },	
+			{ .25f, 0.5f, .75f },	
+			{ .25f, 0.5f, .25f },
 		};
 		
-		int pattern = controls[0];
+		const int p = controls[0]; // selected pattern
 		
 		signal mix = in;
 		for(int d=0; d<3; d++)
-			mix += delay(times[pattern][d] * fs) * gains[pattern][d];
+			mix += delay(times[p][d] * fs) * gains[p][d];
 		
 		mix >> out;
 	}
