@@ -1,3 +1,5 @@
+## NB: A preview release of Klang Studio (v0.7pre) for Windows and Mac is now available from https://nash.audio/klang/studio. ##
+
 # klang | C++ for audio
 
 klang is a language for the design and development of realtime audio processes in C++.
