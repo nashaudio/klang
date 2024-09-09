@@ -1547,30 +1547,44 @@ namespace klang {
             
             // get the first argument
             template <typename First, typename... Rest>
-            First first(First first, Rest...) { return first; }
+            First& first(First& first, Rest...) { return first; }
 
-			// Function call operator to invoke the stored callable
+			// get the first argument
+			template <typename First, typename... Rest>
+			const First& first(const First& first, Rest...) const { return first; }
+
+			// Configure callable function's arguments
             template<typename... FuncArgs>
 			Function<SIGNAL,Args...>& operator()(const FuncArgs&... args) {
-                if constexpr (ARGS > 1 && sizeof...(FuncArgs) == 1){
-                    in = first(args...);
-                    std::get<0>(inputs) = in.value;
-                    return *this;
-                } else if constexpr (ARGS == sizeof...(FuncArgs)){
+
+				//// single argument supplied, more than one expected -> use cached inputs or use as input?
+    //            if constexpr (ARGS > 1 && sizeof...(FuncArgs) == 1){
+    //                //in = first(args...);
+    //                std::get<1>(inputs) = in.value;
+    //                return *this;
+    //            } else
+				
+				// Calling: full set of arguments supplied (overwrite live input)
+				if constexpr (ARGS == sizeof...(FuncArgs)){
                     in = first(args...);
                     inputs = std::tuple<Args...>(args...);
                     return *this;
+
+				// Streaming: all but first argument supplied (use live input as x)
                 } else if constexpr (sizeof...(FuncArgs) == (ARGS - 1)){
                     inputs = std::tuple<Args...>(in.value, args...);
                     return *this;
+
+				// Invalid: insufficents arguments
                 } else {
-                    in = first(args...);
-                    std::get<0>(inputs) = in.value;
+					static_assert(sizeof...(FuncArgs) < (ARGS - 1), "Insufficient arguments: can only omit first argument");
+                    //in = first(args...);
+                    //std::get<0>(inputs) = in.value;
                     return *this;
                 }
 			}
 
-			// Function call operator to invoke the stored callable
+			// Configure and call function
 			template<typename... FuncArgs>
 			const float operator()(const FuncArgs&... args) const {
 				signal in = this->in;
@@ -1652,7 +1666,7 @@ namespace klang {
 			struct Series : public Array<Point, SIZE + 1>, Input<signal> {
 				virtual ~Series() { }
 
-				void* function = nullptr;
+				const void* function = nullptr;
 				uint64_t hash = 0;
 
 				using Array = Array<Point, SIZE + 1>;
@@ -1665,12 +1679,12 @@ namespace klang {
 				}
 
 				template<typename SIGNAL, typename... Args>
-				void plot(Generic::Function<SIGNAL, Args...>& f, const Axis& x_axis) {
+				void plot(const Generic::Function<SIGNAL, Args...>& f, const Axis& x_axis) {
 					constexpr int size = SIZE > 1024 ? 1024 : SIZE;
 
-					if (function != (void*)f || hash != f.hash()) {
+					if (function != (const void*)&f || hash != f.hash()) {
 						clear();
-						function = (void*)f;
+						function = (const void*)&f;
 						hash = f.hash();
 						double x = 0;
 						const double dx = x_axis.range() / size;
