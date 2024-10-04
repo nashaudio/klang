@@ -19,13 +19,11 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -43,6 +41,14 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)..\..\..\release\klang\</OutDir>
+    <TargetName>dummy</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)..\..\..\release\klang\</OutDir>
+    <TargetName>dummy</TargetName>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -54,6 +60,14 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>cd $(OutDir)
+klang.cmd</Command>
+    </PreBuildEvent>
+    <PreBuildEvent>
+      <Message>
+      </Message>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -70,33 +84,43 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>cd $(OutDir)
+klang.cmd</Command>
+    </PreBuildEvent>
+    <PreBuildEvent>
+      <Message>
+      </Message>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <None Include="..\Background" />
-    <None Include="..\DX7.k" />
-    <None Include="..\MyEffect.k" />
-    <None Include="..\MySynth.k" />
-    <None Include="..\THX.k" />
+    <ClInclude Include="..\..\..\..\release\klang\include\dsp.h" />
+    <ClInclude Include="..\..\..\..\release\klang\include\KEffect.h" />
+    <ClInclude Include="..\..\..\..\release\klang\include\klang.h" />
+    <ClInclude Include="..\..\..\..\release\klang\include\klang\tests.h" />
+    <ClInclude Include="..\..\..\..\release\klang\include\KSynth.h" />
+    <ClInclude Include="..\..\..\..\release\klang\include\plugin.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\Extra.h" />
-    <ClInclude Include="..\..\include\klang.h" />
-    <ClInclude Include="..\..\include\klang\tests.h" />
-    <ClInclude Include="..\MyEffect.h" />
-    <ClInclude Include="..\MyNote.h" />
-    <ClInclude Include="..\MySynth.h" />
+    <None Include="..\..\..\..\release\klang\klang.dll" />
+    <None Include="..\..\..\..\release\klang\klang.exe" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\include\wasm.cpp">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    <ClCompile Include="..\..\..\..\release\klang\include\KEffect.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </ClCompile>
-    <ClCompile Include="..\MyEffect.cpp" />
-    <ClCompile Include="..\MyNote.cpp" />
-    <ClCompile Include="..\MySynth.cpp" />
+    <ClCompile Include="..\..\..\..\release\klang\include\KSynth.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="..\..\..\..\release\klang\include\wasm.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <Library Include="..\MySynth.lib" />
+    <Natvis Include="..\..\..\..\release\klang\include\klang.natvis" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

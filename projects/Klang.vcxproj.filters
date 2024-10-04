@@ -1,73 +1,52 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source Files">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
-    </Filter>
-    <Filter Include="Header Files">
+    <Filter Include="include">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="include\klang">
+      <UniqueIdentifier>{5ef68d39-635e-4065-ad27-1fdb01b3fb93}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\Background">
-      <Filter>Source Files</Filter>
-    </None>
-    <None Include="..\DX7.k">
-      <Filter>Source Files</Filter>
-    </None>
-    <None Include="..\MyEffect.k">
-      <Filter>Source Files</Filter>
-    </None>
-    <None Include="..\MySynth.k">
-      <Filter>Source Files</Filter>
-    </None>
-    <None Include="..\THX.k">
-      <Filter>Source Files</Filter>
-    </None>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\Extra.h">
-      <Filter>Source Files</Filter>
+    <ClInclude Include="..\..\..\..\release\klang\include\klang\tests.h">
+      <Filter>include\klang</Filter>
     </ClInclude>
-    <ClInclude Include="..\MyEffect.h">
-      <Filter>Source Files</Filter>
+    <ClInclude Include="..\..\..\..\release\klang\include\dsp.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="..\MyNote.h">
-      <Filter>Source Files</Filter>
+    <ClInclude Include="..\..\..\..\release\klang\include\KEffect.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="..\MySynth.h">
-      <Filter>Source Files</Filter>
+    <ClInclude Include="..\..\..\..\release\klang\include\klang.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\klang.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\..\..\..\release\klang\include\KSynth.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\klang\tests.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\..\..\..\release\klang\include\plugin.h">
+      <Filter>include</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\MyEffect.cpp">
-      <Filter>Source Files</Filter>
+    <None Include="..\..\..\..\release\klang\klang.dll" />
+    <None Include="..\..\..\..\release\klang\klang.exe" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\..\release\klang\include\KEffect.cpp">
+      <Filter>include</Filter>
     </ClCompile>
-    <ClCompile Include="..\MyNote.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="..\..\..\..\release\klang\include\KSynth.cpp">
+      <Filter>include</Filter>
     </ClCompile>
-    <ClCompile Include="..\MySynth.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\include\wasm.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="..\..\..\..\release\klang\include\wasm.cpp">
+      <Filter>include</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <Library Include="..\MySynth.lib">
-      <Filter>Source Files</Filter>
-    </Library>
+    <Natvis Include="..\..\..\..\release\klang\include\klang.natvis">
+      <Filter>include</Filter>
+    </Natvis>
   </ItemGroup>
 </Project>
