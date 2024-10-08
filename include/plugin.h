@@ -210,10 +210,26 @@ namespace MiniPlugin
         float value[128] = { 0 };
 
         typedef klang::Control::Group Group;
-        typedef Array<Group, 32> Groups;
+        typedef Array<klang::Control::Group,32> Groups;
 
         void operator+= (const Parameter& control) {
             items[count++] = control;
+        }
+
+        static bool inGroup(int index, const Groups& groups) {
+            for (unsigned int g = 0; g < groups.count; g++) {
+                if (groups[g].contains(index))
+                    return true;
+            }
+            return false;
+        }
+
+        static const Group* getGroup(int index, const Groups& groups) {
+            for (unsigned int g = 0; g < groups.count; g++) {
+                if (groups[g].contains(index))
+                    return &groups[g];
+            }
+            return nullptr; // Not found
         }
 
         void operator= (const Parameters& controls) {

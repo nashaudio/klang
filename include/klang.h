@@ -981,6 +981,7 @@ namespace klang {
 			int height;
 
 			bool isAuto() const { return x == -1 && y == -1 && width == -1 && height == -1; }
+			bool isRelative() const { return x != -1 && y != -1; }
 		};
 
 		// Control Group
@@ -989,6 +990,8 @@ namespace klang {
 			Control::Size size;
 			unsigned int start = 0;
 			unsigned int length = 0;
+
+			bool contains(unsigned int c) const { return c >= start && c < (start + length); }
 		};
 
 		typedef Array<Caption, 128> Options;
@@ -1142,6 +1145,14 @@ namespace klang {
 
 		template <typename... Controls>
 		Group(Controls... ctrls) : name(""), size(Automatic), controls{ std::forward<Controls>(ctrls)... } { }
+
+		Group(const char* name, Control::Size size, std::initializer_list<Control> controls) : name(name), size(size), controls{ controls } { }
+
+		template <typename... Controls>
+		Group(const char* name, Control::Size size, Controls... ctrls) : name(name), size(size), controls{ std::forward<Controls>(ctrls)... } { }
+
+		template <typename... Controls>
+		Group(Control::Size size, Controls... ctrls) : name(""), size(size), controls{ std::forward<Controls>(ctrls)... } { }
 	};
 
 	static Array<Control::Group, 32> Groups;
@@ -1193,6 +1204,11 @@ namespace klang {
 				}
 			}
 			return changed;
+		}
+
+		void group(const char* name, unsigned int start, unsigned int length, Control::Size size = Automatic) {
+			const Control::Group g = { Caption::from(name), size, start, length };
+			Groups.add(g);
 		}
 
 		//float& operator[](int index) { return items[index].value; }
@@ -3196,8 +3212,10 @@ namespace klang {
 			klang::Controls* controls = nullptr;
 		public:
 			Controls& operator=(klang::Controls& controls) { Controls::controls = &controls; return *this; }
-			signal& operator[](int index) { return controls->operator[](index).operator signal & (); }
-			const signal& operator[](int index) const { return controls->operator[](index).operator const signal & (); }
+			//signal& operator[](int index) { return controls->operator[](index).operator signal & (); }
+			//const signal& operator[](int index) const { return controls->operator[](index).operator const signal & (); }
+			Control& operator[](int index) { return controls->operator[](index); }
+			const Control& operator[](int index) const { return controls->operator[](index); }
 			unsigned int size() { return controls ? controls->size() : 0; }
 		};
 
