@@ -69,15 +69,7 @@ extern "C" {                                                                    
         }                                                                                                                   \
         catch (...) { return 1; }                                                                                           \
     }                                                                                                                       \
-                                                                                                                            \
-    VOID_FUNCTION getParameterGroups(void* plugin) {                                                                        \
-        try {                                                                                                               \
-            ((CLASS*)plugin)->groups = klang::Groups;                                                                       \
-        }                                                                                                                   \
-        catch (...) { }                                                                                                     \
-    }                                                                                                                       \
 }
-
 
 #if !KLANG
 #define EFFECT(NAME)                                                                                                        \
@@ -207,16 +199,14 @@ namespace MiniPlugin
 	
     struct Parameters : Array<Parameter, 128>
     {
-        float value[128] = { 0 };
-
-        typedef klang::Control::Group Group;
-        typedef Array<klang::Control::Group,32> Groups;
+		float value[128] = { 0 }; // 128 * 4 bytes (512 bytes)
+        Array<Control::Group, 10> groups;
 
         void operator+= (const Parameter& control) {
             items[count++] = control;
         }
 
-        static bool inGroup(int index, const Groups& groups) {
+        bool inGroup(int index) {
             for (unsigned int g = 0; g < groups.count; g++) {
                 if (groups[g].contains(index))
                     return true;
@@ -224,7 +214,7 @@ namespace MiniPlugin
             return false;
         }
 
-        static const Group* getGroup(int index, const Groups& groups) {
+        const Control::Group* getGroup(int index) {
             for (unsigned int g = 0; g < groups.count; g++) {
                 if (groups[g].contains(index))
                     return &groups[g];
@@ -327,7 +317,6 @@ namespace MiniPlugin
         }
         
         Parameters parameters;
-        Parameters::Groups groups;
         Presets presets;
 
         Debug debug;

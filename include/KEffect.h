@@ -17,6 +17,7 @@ public:
     template<class TYPE>
     KEffect(TYPE* effect) : effect(effect) {
         parameters = effect->controls;
+        parameters.groups = effect->controls.groups;
         presets = effect->presets;
 
         if (klang::graph.isActive())

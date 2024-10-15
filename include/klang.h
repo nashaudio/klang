@@ -77,8 +77,12 @@ namespace klang {
 	struct Version {
 		unsigned char major, minor, build, extra;
 		bool isDebug() const { return extra & 1; }
+		bool atLeast(unsigned char M, unsigned char m, unsigned char b) const {
+			return M < major || (M == major && m < minor) || (M == major && m == minor && b <= build);
+		}
+		bool below(unsigned char M, unsigned char m, unsigned char b) const { return !atLeast(M, m, b); }
 	}
-	static constexpr version = { 0, 7, 0, KLANG_DEBUG };
+	static constexpr version = { 0, 7, 2, KLANG_DEBUG };
 
 	/// Klang mode identifiers (e.g. averages, level following)
 	enum Mode { Peak, RMS, Mean };
@@ -240,8 +244,8 @@ namespace klang {
 	/// Variable-sized array, pre-allocated to a max. capacity.
 	template<typename TYPE, int CAPACITY>
 	struct Array {
-		TYPE items[CAPACITY];
 		unsigned int count = 0;
+		TYPE items[CAPACITY];
 
 		/// The maximum capacity of the array.
 		static int capacity() { return CAPACITY; }
@@ -985,11 +989,11 @@ namespace klang {
 		};
 
 		// Control Group
-		struct Group {
-			Caption name;
-			Control::Size size;
-			unsigned int start = 0;
-			unsigned int length = 0;
+		struct Group {					// 48 bytes
+			Caption name;				// 36 bytes (32+1 aligned)
+			Control::Size size;			// 4 bytes
+			unsigned int start = 0;		// 4 bytes
+			unsigned int length = 0;	// 4 bytes
 
 			bool contains(unsigned int c) const { return c >= start && c < (start + length); }
 		};
@@ -1016,6 +1020,11 @@ namespace klang {
 
 		static constexpr float smoothing = 0.999f;
 		signal smooth() { return smoothed = smoothed * smoothing + (1.f - smoothing) * value; }
+
+		float range() const { return max - min; }
+		float normalise(float value) const { return range() ? (value - min) / range() : std::clamp(value, 0.f, 1.f); }
+		float normalised() const { return range() ? (value.value - min) / range() : std::clamp(value.value, 0.f, 1.f); }
+		void setNormalised(float norm) { value.value = norm * range() + min; }
 
 		operator Control* () { return this; }
 
@@ -1155,12 +1164,11 @@ namespace klang {
 		Group(Control::Size size, Controls... ctrls) : name(""), size(size), controls{ std::forward<Controls>(ctrls)... } { }
 	};
 
-	static Array<Control::Group, 32> Groups;
-
 	/// Plugin UI controls
 	struct Controls : Array<Control, 128>
 	{
 		float value[128] = { 0 };
+		Array<Control::Group, 10> groups;
 
 		void operator+= (const Control& control) {
 			items[count++] = control;
@@ -1179,7 +1187,7 @@ namespace klang {
 		void operator=(std::initializer_list<klang::Group> controls) {
 			for (auto group : controls) {
 				if (group.name && group.name[0])
-					Groups.add({ Caption::from(group.name), group.size, count, (unsigned int)group.controls.size() });
+					groups.add({ Caption::from(group.name), group.size, count, (unsigned int)group.controls.size() });
 				for (auto control : group.controls)
 					operator+=(control);
 			}
@@ -1208,7 +1216,7 @@ namespace klang {
 
 		void group(const char* name, unsigned int start, unsigned int length, Control::Size size = Automatic) {
 			const Control::Group g = { Caption::from(name), size, start, length };
-			Groups.add(g);
+			groups.add(g);
 		}
 
 		//float& operator[](int index) { return items[index].value; }

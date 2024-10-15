@@ -118,7 +118,7 @@ struct MySynth : Synth {
 		void process() {
 			const bool is_square = controls[3] == 1;
 			const signal osc = is_square ? (signal)(square * 0.5f) : (signal)saw;
-			const float fc = (f + (controls[0]^2) * fs.nyquist) * ((flt++)^2);
+			const float fc = (f + controls[0] * fs.nyquist) * ((flt++)^2);
 			const float hpf_f = 10.f + 490.f * controls[1]; // + 0.f * controls[0];
 			filter.set(fc, (is_square ? 0.9f : 1.f) * controls[1], controls[4]);
 			filter.setHPF(hpf_f);
@@ -133,8 +133,10 @@ struct MySynth : Synth {
 	MySynth() {		
 		controls = { 
 			// UI controls and parameters
-			Dial("f", 0, 1, 1),
-			Dial("Q", 0, 1, 0.5),
+			{ "Filter",
+				Dial("f", 0, 1, 1),
+				Dial("Q", 0, 1, 0.5),
+			},
 			Dial("Decay", 0.1, 1, 0.5),
 			Menu("Waveform", "Saw", "Square"),
 			Dial("Accent", 0.01, 10, 1)

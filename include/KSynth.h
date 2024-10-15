@@ -103,8 +103,9 @@ public:
         for (int n = 0; n < 128; n++) // create synthesiser's notes
             notes[n] = new Note<TYPE>(this, synth->notes[n]);
 
-        parameters = *(klang::Controls*)&synth->controls;
-        presets = *(MiniPlugin::Presets*)&synth->presets;
+        parameters = synth->controls;
+        parameters.groups = synth->controls.groups;
+        presets = synth->presets;
 
         if (klang::graph->isActive())
             debug.graph = klang::graph;
