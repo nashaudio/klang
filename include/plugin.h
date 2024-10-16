@@ -26,7 +26,7 @@
         #include "Background"
     #else
         #define BACKGROUND 0
-        #pragma message("Background not found")
+        //#pragma message("Background not found")
     #endif
 
     namespace Background {

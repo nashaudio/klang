@@ -100,6 +100,11 @@ klang.cmd</Command>
     <ClInclude Include="..\..\..\..\release\klang\include\klang\tests.h" />
     <ClInclude Include="..\..\..\..\release\klang\include\KSynth.h" />
     <ClInclude Include="..\..\..\..\release\klang\include\plugin.h" />
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\dsp.h" />
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KEffect.h" />
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\klang.h" />
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KSynth.h" />
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\plugin.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\..\release\klang\klang.dll" />
@@ -117,6 +122,12 @@ klang.cmd</Command>
     <ClCompile Include="..\..\..\..\release\klang\include\wasm.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KEffect.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KSynth.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

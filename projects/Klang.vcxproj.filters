@@ -8,6 +8,9 @@
     <Filter Include="include\klang">
       <UniqueIdentifier>{5ef68d39-635e-4065-ad27-1fdb01b3fb93}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Klang Projects">
+      <UniqueIdentifier>{ea62f594-b2fe-4330-9d91-e4067d38a39f}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\..\..\release\klang\include\klang\tests.h">
@@ -28,6 +31,21 @@
     <ClInclude Include="..\..\..\..\release\klang\include\plugin.h">
       <Filter>include</Filter>
     </ClInclude>
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\dsp.h">
+      <Filter>Klang Projects</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KEffect.h">
+      <Filter>Klang Projects</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\klang.h">
+      <Filter>Klang Projects</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KSynth.h">
+      <Filter>Klang Projects</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Chris Nash\Documents\Klang Projects\include\plugin.h">
+      <Filter>Klang Projects</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\..\release\klang\klang.dll" />
@@ -42,6 +60,12 @@
     </ClCompile>
     <ClCompile Include="..\..\..\..\release\klang\include\wasm.cpp">
       <Filter>include</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KEffect.cpp">
+      <Filter>Klang Projects</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Chris Nash\Documents\Klang Projects\include\KSynth.cpp">
+      <Filter>Klang Projects</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

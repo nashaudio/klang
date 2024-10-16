@@ -1461,6 +1461,8 @@ namespace klang {
 			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - (other); }
 			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / (other); }
 
+			void reset() { out = 0; }
+
 		protected:
 			// signal processing
 			virtual void process() = 0;
@@ -1576,7 +1578,12 @@ namespace klang {
 			operator param() {
 				if (function)
 					return evaluate();
-				return 2.f;
+				return out;
+			}
+			operator float () {
+				if (function)
+					return evaluate();
+				return out;
 			}
 
 			/// @cond
@@ -3108,7 +3115,7 @@ namespace klang {
 		ADSR() { set(0.5, 0.5, 1, 0.5); }
 
 		void set(param attack, param decay, param sustain, param release) override {
-			A = attack + 0.005f;
+			A = attack;
 			D = decay + 0.005f;
 			S = sustain;
 			R = release + 0.005f;
