@@ -103,7 +103,7 @@ struct Subtractive : Note {
 	 
    void process() {
       signal mod = lfo(3) * 0.5 + 0.5;
-      osc * adsr++ >> lpf(mod) >> out;     
+      osc * adsr >> lpf(mod) >> out;     
       if (adsr.finished())
          stop();
    }
