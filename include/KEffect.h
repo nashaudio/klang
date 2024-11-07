@@ -67,7 +67,7 @@ public:
                 debug.console = &klang::debug.console;
 
             for (int p = 0; p < nbParameters; p++)
-                parameters[p].set(effect.control(p));
+                parameters[p].value = effect.control(p);
         }
     }
 

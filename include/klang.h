@@ -1014,7 +1014,7 @@ namespace klang {
 		signal smoothed;		// smoothed control value (filtered)
 
 		operator signal& () { return value; }
-		operator const signal& () const { return value; }
+		operator signal () const { return value; }
 		operator param() const { return value; }
 		operator float() const { return value.value; }
 
@@ -1043,15 +1043,15 @@ namespace klang {
 		//float operator-(float x) const { return value - x; }
 		//float operator/(float x) const { return value / x; }
 
-		template<typename TYPE> signal operator+(const Control& x) const { return value + x; }
-		template<typename TYPE> signal operator*(const Control& x) const { return value * x; }
-		template<typename TYPE> signal operator-(const Control& x) const { return value - x; }
-		template<typename TYPE> signal operator/(const Control& x) const { return value / x; }
+		template<typename TYPE> signal operator+(const Control& x) const { return value + (signal)x; }
+		template<typename TYPE> signal operator*(const Control& x) const { return value * (signal)x; }
+		template<typename TYPE> signal operator-(const Control& x) const { return value - (signal)x; }
+		template<typename TYPE> signal operator/(const Control& x) const { return value / (signal)x; }
 
-		template<typename TYPE> float operator+(TYPE x) const { return value + x; }
-		template<typename TYPE> float operator*(TYPE x) const { return value * x; }
-		template<typename TYPE> float operator-(TYPE x) const { return value - x; }
-		template<typename TYPE> float operator/(TYPE x) const { return value / x; }
+		template<typename TYPE> float operator+(TYPE x) const { return value + (signal)x; }
+		template<typename TYPE> float operator*(TYPE x) const { return value * (signal)x; }
+		template<typename TYPE> float operator-(TYPE x) const { return value - (signal)x; }
+		template<typename TYPE> float operator/(TYPE x) const { return value / (signal)x; }
 
 		template<typename TYPE> Control& operator<<(TYPE& in) { value = in; return *this; }		// assign to control with processing
 		template<typename TYPE> Control& operator<<(const TYPE& in) { value = in; return *this; }	// assign to control without/after processing
@@ -1062,6 +1062,20 @@ namespace klang {
 
 	const Control::Size Automatic = { -1, -1, -1, -1 };
 	const Control::Options NoOptions;
+
+	/// Return a copy of the signal with each channel offset by x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator+(const Control& x, const signals<CHANNELS>& y) { return y + x.value; }
+	/// Return a copy of the signal with each channel subtracted from  x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator-(const Control& x, const signals<CHANNELS>& y) { return -y + x.value; }
+	/// Return a copy of the signal  with each channel scaled by x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator*(const Control& x, const signals<CHANNELS>& y) { return y * x.value; }
+	/// Return a copy of the signal with each channel divided into x.
+	template<int CHANNELS = 2> inline signals<CHANNELS> operator/(const Control& x, const signals<CHANNELS>& y) {
+		signals<CHANNELS> s = { 0.f };
+		for (int c = 0; c < CHANNELS; c++)
+			s[c] = x.value / y[c];
+		return std::move(s);
+	}
 
 	/// Mapped UI control
 	struct ControlMap {
@@ -1456,10 +1470,10 @@ namespace klang {
 			virtual operator const SIGNAL& () const { return out; } // return last output
 
 			// arithmetic operations produce copies
-			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + (other); }
-			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * (other); }
-			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - (other); }
-			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / (other); }
+			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / SIGNAL(other); }
 
 			void reset() { out = 0; }
 
@@ -1551,13 +1565,21 @@ namespace klang {
 			// overrideable parameter setting (up to 8 parameters)
 			/// @cond
 			virtual void set(param) { };
+			virtual void set(relative) { }; // relative alternative
 			virtual void set(param, param) { };
+			virtual void set(param, relative) { }; // relative alternative
 			virtual void set(param, param, param) { };
+			virtual void set(param, param, relative) { }; // relative alternative
 			virtual void set(param, param, param, param) { };
+			virtual void set(param, param, param, relative) { }; // relative alternative
 			virtual void set(param, param, param, param, param) { };
+			virtual void set(param, param, param, param, relative) { }; // relative alternative
 			virtual void set(param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, relative) { }; // relative alternative
 			virtual void set(param, param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param, relative) { }; // relative alternative
 			virtual void set(param, param, param, param, param, param, param, param) { };
+			virtual void set(param, param, param, param, param, param, param, relative) { }; // relative alternative
 			/// @endcond
 		};
 
@@ -1571,18 +1593,18 @@ namespace klang {
 
 			operator SIGNAL() {
 				if (function)
-					return evaluate();
+					return out = evaluate();
 				process();
 				return out;
 			};
 			operator param() {
 				if (function)
-					return evaluate();
+					return out = evaluate();
 				return out;
 			}
-			operator float () {
+			operator float() {
 				if (function)
-					return evaluate();
+					return out = evaluate();
 				return out;
 			}
 
@@ -1706,10 +1728,16 @@ namespace klang {
 				}
 
 				// return outputs
-				if constexpr (ARGS > 1)
-					return std::apply(function, inputs);
-				else
-					return function(in);
+				if (function) {
+					if constexpr (ARGS > 1)
+						return std::apply(function, inputs);
+					else
+						return function(in);
+				}
+				else {
+					// NOT YET IMPLEMENTED (needs non-const status)
+					return out;
+				}
 			}
 
 			template<typename... FuncArgs>
@@ -1726,7 +1754,7 @@ namespace klang {
 				if constexpr (ARGS > 1)
 					return std::apply(function, inputs);
 				else
-					return function(in);
+					return (signal)function(in);
 			}
 
 			virtual void process() override {
@@ -1735,6 +1763,11 @@ namespace klang {
 
 			klang::Graph& operator>>(klang::Graph& graph);
 			klang::GraphPtr& operator>>(klang::GraphPtr& graph);
+
+			using Generic::Output<SIGNAL>::operator+;
+			using Generic::Output<SIGNAL>::operator-;
+			using Generic::Output<SIGNAL>::operator*;
+			using Generic::Output<SIGNAL>::operator/;
 		};
 
 		// deduction guide for functions
@@ -1743,6 +1776,14 @@ namespace klang {
 
 		template <typename... Args>
 		Function() -> Function<signal, Args...>;
+
+		template<typename TYPE, typename SIGNAL, typename... Args> SIGNAL operator+(TYPE& x, Function<SIGNAL, float>& func) { return func + (SIGNAL)x; }
+		template<typename TYPE, typename SIGNAL, typename... Args> SIGNAL operator-(TYPE& x, Function<SIGNAL, float>& func) { return -func + (SIGNAL)x; }
+		template<typename TYPE, typename SIGNAL, typename... Args> SIGNAL operator*(TYPE& x, Function<SIGNAL, float>& func) { return func * (SIGNAL)x; }
+		template<typename TYPE, typename SIGNAL, typename... Args> SIGNAL operator/(TYPE& x, Function<SIGNAL, float>& func) {
+			SIGNAL y = (SIGNAL)func;
+			return (SIGNAL)x / y;
+		}
 
 		/// A line graph plotter
 		template<int SIZE>
@@ -2606,11 +2647,10 @@ namespace klang {
 			buffer.clear();
 		}
 
-		//void operator<<(const signal& input) override {
 		void input() override {
 			buffer++ = in;
 			position++;
-			if (buffer.finished()) {
+			if (position == SIZE) {
 				buffer.rewind();
 				position = 0;
 			}
@@ -2623,26 +2663,70 @@ namespace klang {
 			return buffer[read];
 		}
 
+		//signal tap(float delay) const {
+		//	float read = (float)(position - 1) - delay;
+		//	if (read < 0.f)
+		//		read += SIZE;
+
+		//	const float f = floor(read);
+		//	const float fraction = read - f;
+
+		//	const int i = (int)read;
+		//	const int j = (i + 1) % SIZE;
+
+		//	return buffer[i] + fraction * (buffer[j] - buffer[i]);
+		//}
+
 		signal tap(float delay) const {
-			float read = (float)(position - 1) - delay;
+			// Calculate the read position
+			float read = static_cast<float>(position - 1) - delay;
 			if (read < 0.f)
 				read += SIZE;
 
-			const float f = floor(read);
-			delay = read - f;
+			// Separate integer and fractional parts
+			const int i = static_cast<int>(read);  // Integer part
+			const float fraction = read - i;       // Fractional part
 
-			const int i = (int)read;
-			const int j = (i == (SIZE - 1)) ? 0 : (i + 1);
+			// Use modulo to get the next index without branching
+			const int j = (i + 1) % SIZE;          // Next index in circular buffer
 
-			return buffer[i] * (1.f - delay) + buffer[j] * delay;
+			// Linear interpolation: buffer[i] + fraction * (buffer[j] - buffer[i])
+			return buffer[i] + fraction * (buffer[j] - buffer[i]);
+		}
+
+		signal tap() const {
+			// Use modulo to get the next index without branching
+			const int i = last.position;
+			const int j = (i + 1) % SIZE;          // Next index in circular buffer
+
+			// Linear interpolation: buffer[i] + fraction * (buffer[j] - buffer[i])
+			return buffer[i] + last.fraction * (buffer[j] - buffer[i]);
 		}
 
 		virtual void process() override {
-			out = tap(time);
+			out = tap();
+			last.position = (last.position + 1) % SIZE;
 		}
 
-		virtual void set(param delay) override {
-			Delay::time = delay <= SIZE ? (float)delay : SIZE;
+		//Delay<SIZE>& operator++(int) {
+		//	last.position++;
+		//	return *this;
+		//}
+
+		struct Tap {
+			int position;
+			float fraction;
+		} last;
+
+		virtual void set(param samples) override {
+			time = samples < SIZE ? (float)samples : SIZE;
+
+			float read = static_cast<float>(position - 1) - time;
+			if (read < 0.f)
+				read += SIZE;
+
+			last.position = static_cast<int>(read);  // Integer part
+			last.fraction = read - last.position;	 // Fractional part
 		}
 
 		template<typename TIME>
@@ -2882,7 +2966,7 @@ namespace klang {
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
 		bool operator!=(Stage stage) const { return Envelope::stage != stage; }
 
-		operator float() const { return out; }
+		//operator float() const { return out; }
 
 		// assign points (without recreating envelope)
 		Envelope& operator=(std::initializer_list<Point> points) {
@@ -3010,8 +3094,13 @@ namespace klang {
 			(this->*setTargetFunction)(point, time);
 		}
 
-		// Returns the output of the envelope and advances the envelope.
+		// Returns the output of the envelope and advances the envelope (for backwards compatibility)
 		signal& operator++(int) {
+			process();
+			return out;
+		}
+
+		void process() {
 			out = (*ramp)++;
 
 			switch (stage) {
@@ -3044,12 +3133,6 @@ namespace klang {
 			case Off:
 				break;
 			}
-
-			return out;
-		}
-
-		void process() override { /* do nothing -> only process on ++ */
-			out = *ramp;
 		}
 
 		// Retrieve a specified envelope point (read-only)
@@ -3158,7 +3241,7 @@ namespace klang {
 			return *this;
 		}
 
-		Operator& operator*(float amp) {
+		Operator& operator*(signal amp) {
 			Operator::amp = amp;
 			return *this;
 		}
