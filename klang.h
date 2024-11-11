@@ -40,6 +40,13 @@ static inline float _abs(float x) { return __builtin_fabsf(x); }
 #define ABS ::abs
 #define FABS ::fabsf
 #endif
+#if defined (__linux__) || defined (__unix__)
+#define THREAD_LOCAL thread_local
+#define SQRT ::sqrt
+#define SQRTF ::sqrtf
+#define ABS ::abs
+#define FABS ::fabsf
+#endif
 
 #if defined(DEBUG) || defined(_DEBUG)
 #define KLANG_DEBUG 1
