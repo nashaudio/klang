@@ -109,6 +109,8 @@ extern "C" {                                                                    
 
 #define SYNTH(NAME)                                                                                                         \
 extern "C" {                                                                                                                \
+    PLUGIN(MiniPlugin::Synth)                                                                                               \
+                                                                                                                            \
     PTR_FUNCTION synthCreate(float sampleRate) {                                                                            \
         ::stk::Stk::setSampleRate(sampleRate);                                                                              \
         return (MiniPlugin::Synth*)new NAME();                                                                              \
