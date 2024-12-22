@@ -94,7 +94,8 @@ namespace klang {
 
 		/// Create a constant from the given value.
 		constexpr constant(double value) noexcept
-			: d(value), f(static_cast<float>(value)), i(static_cast<int>(value)), inv(value == 0.0f ? 0.0f : static_cast<float>(1.0 / value)) { }
+			: d(value), f(static_cast<float>(value)), i(static_cast<int>(value)), inv(value == 0.0f ? 0.0f : static_cast<float>(1.0 / value)) {
+		}
 
 		const double d; //!< Constant as double
 		const float f; //!< Constant as float
@@ -977,7 +978,8 @@ namespace klang {
 		struct Size
 		{
 			Size(int x = -1, int y = -1, int width = -1, int height = -1)
-				: x(x), y(y), width(width), height(height) { }
+				: x(x), y(y), width(width), height(height) {
+			}
 
 			int x;
 			int y;
@@ -1651,7 +1653,8 @@ namespace klang {
 
 			template<typename FunctionPtr>
 			Function(FunctionPtr function)
-				: function(std::forward<FunctionPtr>(function)) {}
+				: function(std::forward<FunctionPtr>(function)) {
+			}
 
 			template<typename FunctionPtr, typename... OtherArgs>
 			Function(FunctionPtr function, OtherArgs... args)
@@ -2937,7 +2940,7 @@ namespace klang {
 
 		/// Envelope loop
 		struct Loop {
-			Loop(int from = -1, int to = -1) : start(from), end(to) {}
+			Loop(int from = -1, int to = -1) : start(from), end(to) { }
 
 			void set(int from, int to) { start = from; end = to; }
 			void reset() { start = end = -1; }
@@ -3294,7 +3297,7 @@ namespace klang {
 			prepare();
 			while (!buffer.finished()) {
 				input(buffer);
-				process();
+				this->process();
 				buffer++ = out;
 				debug.buffer++;
 			}
@@ -3379,7 +3382,7 @@ namespace klang {
 		virtual bool process(buffer buffer) {
 			prepare();
 			while (!buffer.finished()) {
-				process();
+				this->process();
 				buffer++ = out;
 				debug.buffer++;
 			}
@@ -3419,7 +3422,7 @@ namespace klang {
 
 		int assign() {
 			// favour unused voices
-			for (int i = 0; i < count; i++) {
+			for (unsigned int i = 0; i < count; i++) {
 				if (items[i]->stage == NOTE::Off) {
 					noteStart[i] = noteOns++;
 					return i;
@@ -3429,7 +3432,7 @@ namespace klang {
 			// no free notes => steal oldest released note?
 			int oldest = -1;
 			unsigned int oldest_start = 0;
-			for (int i = 0; i < count; i++) {
+			for (unsigned int i = 0; i < count; i++) {
 				if (items[i]->stage == NOTE::Release) {
 					if (oldest == -1 || noteStart[i] < oldest_start) {
 						oldest = i;
@@ -3445,7 +3448,7 @@ namespace klang {
 			// no available released notes => steal oldest playing note
 			oldest = -1;
 			oldest_start = 0;
-			for (int i = 0; i < count; i++) {
+			for (unsigned int i = 0; i < count; i++) {
 				if (oldest == -1 || noteStart[i] < oldest_start) {
 					oldest = i;
 					oldest_start = noteStart[i];
@@ -3483,15 +3486,71 @@ namespace klang {
 		virtual event onControl(int index, float value) override {
 			control(index, value);
 			for (unsigned int n = 0; n < notes.count; n++)
-				notes[n]->onControl(index, value);
+				if (notes[n]->stage != Note::Off)
+					notes[n]->onControl(index, value);
 		};
+
+		// pass to synth and notes
+		virtual event onMIDI(int status, int byte1, int byte2) override {
+			onMIDI(status, byte1, byte2);
+			for (unsigned int n = 0; n < notes.count; n++)
+				if (notes[n]->stage != Note::Off)
+					notes[n]->onMIDI(status, byte1, byte2);
+		}
 
 		// pass to synth and notes
 		virtual event onPreset(int index) override {
 			preset(index);
 			for (unsigned int n = 0; n < notes.count; n++)
-				notes[n]->onPreset(index);
+				if (notes[n]->stage != Note::Off)
+					notes[n]->onPreset(index);
 		};
+
+		// assign and start note
+		virtual event noteOn(int pitch, float velocity) {
+			const int n = notes.assign();
+			if (n != -1)
+				notes[n]->start((float)pitch, velocity);
+		}
+
+		// trigger note off (release)
+		virtual event noteOff(int pitch, float velocity) {
+			for (unsigned int n = 0; n < notes.count; n++)
+				if (notes[n]->pitch == pitch && notes[n]->stage == Note::Sustain)
+					notes[n]->release(velocity);
+		}
+
+		// post processing (see Effect::process)
+		virtual void process() override { out = in; }
+		virtual void process(buffer buffer) override { Effect::process(buffer); }
+
+		virtual void process(float* buffer, int length, float* parameters = nullptr) {
+			klang::buffer mono(buffer, length);
+
+			// sync parameters
+			if (parameters) {
+				for (unsigned int c = 0; c < controls.size(); c++)
+					controls[c].set(parameters[c]);
+			}
+
+			// generate note audio
+			for (unsigned int n = 0; n < notes.count; n++) {
+				Note* note = notes[n];
+				if (note->stage != Note::Off) {
+					if (!note->process(mono))
+						note->stop();
+				}
+			}
+
+			// apply post processing
+			this->process(mono);
+
+			// sync update (changed by process())
+			if (parameters) {
+				for (unsigned int c = 0; c < controls.size(); c++)
+					parameters[c] = controls[c].value;
+			}
+		}
 	};
 
 	template<class SYNTH, class NOTE>
@@ -3586,15 +3645,15 @@ namespace klang {
 		};
 
 		/// Audio input object (stereo)
-		struct Input : Generic::Input<signal> { virtual ~Input() {} };
+		struct Input : Generic::Input<signal> { virtual ~Input() { } };
 		/// Audio output object (stereo)
-		struct Output : Generic::Output<signal> { virtual ~Output() {} };
+		struct Output : Generic::Output<signal> { virtual ~Output() { } };
 		/// Signal generator object (stereo output)
-		struct Generator : Generic::Generator<signal> { virtual ~Generator() {} };
+		struct Generator : Generic::Generator<signal> { virtual ~Generator() { } };
 		/// Signal modifier object (stereo, input-output)
-		struct Modifier : Generic::Modifier<signal> { virtual ~Modifier() {} };
+		struct Modifier : Generic::Modifier<signal> { virtual ~Modifier() { } };
 		/// Audio oscillator object (stereo, output)
-		struct Oscillator : Generic::Oscillator<signal> { virtual ~Oscillator() {} };
+		struct Oscillator : Generic::Oscillator<signal> { virtual ~Oscillator() { } };
 
 		//inline Modifier& operator>>(signal input, Modifier& modifier) {
 		//	modifier << input;
@@ -3756,7 +3815,7 @@ namespace klang {
 				prepare();
 				while (!buffer.finished()) {
 					process();
-					buffer++ = out;
+					buffer++ += out;
 				}
 				return !finished();
 			}
@@ -3766,9 +3825,30 @@ namespace klang {
 			}
 		};
 
+		namespace Mono {
+			struct Note : public Stereo::Note, public klang::Mono::Generator {
+				using klang::Mono::Generator::out;
+
+				virtual void prepare() override { }
+				virtual void process() override = 0;
+				virtual bool process(Stereo::buffer buffer) override {
+					prepare();
+					while (!buffer.finished()) {
+						process();
+						buffer.left += out;
+						buffer.right += out;
+						buffer++;
+					}
+					return !finished();
+				}
+			};
+		}
+
 		/// Synthesier mini-plugin (stereo)
 		struct Synth : public Effect {
 			typedef Stereo::Note Note;
+
+			struct Mono { typedef Stereo::Mono::Note Note; };
 
 			/// Synthesiser note array (stereo)
 			struct Notes : klang::Notes<Synth, Note> {
@@ -3778,18 +3858,90 @@ namespace klang {
 			Synth() : notes(this) { }
 			virtual ~Synth() { }
 
-			virtual void presetLoaded(int preset) { }
-			virtual void optionChanged(int param, int item) { }
-			virtual void buttonPressed(int param) { };
+			//virtual void presetLoaded(int preset) { }
+			//virtual void optionChanged(int param, int item) { }
+			//virtual void buttonPressed(int param) { };
 
 			int indexOf(Note* note) const {
 				int index = 0;
 				for (const auto* n : notes.items) {
-					if (note == n) return
-						index;
+					if (note == n)
+						return index;
 					index++;
 				}
 				return -1; // not found
+			}
+
+			// pass to synth and notes
+			virtual event onControl(int index, float value) override {
+				control(index, value);
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->onControl(index, value);
+			};
+
+			// pass to synth and notes
+			virtual event onMIDI(int status, int byte1, int byte2) override {
+				onMIDI(status, byte1, byte2);
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->onMIDI(status, byte1, byte2);
+			}
+
+			// pass to synth and notes
+			virtual event onPreset(int index) override {
+				preset(index);
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->onPreset(index);
+			};
+
+			// assign and start note
+			virtual event noteOn(int pitch, float velocity) {
+				const int n = notes.assign();
+				if (n != -1)
+					notes[n]->start((float)pitch, velocity);
+			}
+
+			// trigger note off (release)
+			virtual event noteOff(int pitch, float velocity) {
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->pitch == pitch && notes[n]->stage == Note::Sustain)
+						notes[n]->release(velocity);
+			}
+
+			// post processing (see Effect::process)
+			virtual void process() override { out = in; }
+			virtual void process(buffer buffer) override { Effect::process(buffer); }
+
+			virtual void process(float** buffers, int length, float* parameters = nullptr) {
+				klang::buffer left(buffers[0], length);
+				klang::buffer right(buffers[1], length);
+				klang::Stereo::buffer buffer(left, right);
+
+				// sync parameters
+				if (parameters) {
+					for (unsigned int c = 0; c < controls.size(); c++)
+						controls[c].set(parameters[c]);
+				}
+
+				// generate note audio
+				for (unsigned int n = 0; n < notes.count; n++) {
+					Note* note = notes[n];
+					if (note->stage != Note::Off) {
+						if (!note->process(buffer))
+							note->stop();
+					}
+				}
+
+				// apply post processing
+				this->process(buffer);
+
+				// sync update (changed by process())
+				if (parameters) {
+					for (unsigned int c = 0; c < controls.size(); c++)
+						parameters[c] = controls[c].value;
+				}
 			}
 		};
 	}
@@ -4280,13 +4432,13 @@ namespace klang {
 			/// @endcond
 
 			/// Saw wave oscillator (band-limited, optimised)
-			struct Saw : public Osm { Saw() : Osm(&OSM::saw, 0.f) {} };
+			struct Saw : public Osm { Saw() : Osm(&OSM::saw, 0.f) { } };
 			/// Triangle wave oscillator (band-limited, optimised)
-			struct Triangle : public Osm { Triangle() : Osm(&OSM::saw, 1.f) {} };
+			struct Triangle : public Osm { Triangle() : Osm(&OSM::saw, 1.f) { } };
 			/// Square wave oscillator (band-limited, optimised)
-			struct Square : public Osm { Square() : Osm(&OSM::pulse, 1.0f) {} };
+			struct Square : public Osm { Square() : Osm(&OSM::pulse, 1.0f) { } };
 			/// Pulse wave oscillator (band-limited, optimised)
-			struct Pulse : public Osm { Pulse() : Osm(&OSM::pulse, 0.5f) {} };
+			struct Pulse : public Osm { Pulse() : Osm(&OSM::pulse, 0.5f) { } };
 
 			/// White noise generator (optimised)
 			struct Noise : public Generator {
