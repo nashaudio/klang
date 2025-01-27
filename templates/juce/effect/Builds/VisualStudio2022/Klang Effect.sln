@@ -1,0 +1,46 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual Studio Version 17
+
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Klang Effect - Standalone Plugin", "Klang Effect_StandalonePlugin.vcxproj", "{3DC84EDF-868E-998F-4DB8-83B8B87212FE}"
+	ProjectSection(ProjectDependencies) = postProject
+		{20539528-13DA-C5BC-3CFC-4000E67AF8B2} = {20539528-13DA-C5BC-3CFC-4000E67AF8B2}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Klang Effect - VST3", "Klang Effect_VST3.vcxproj", "{414EA339-49A3-A674-1F23-B7AB6834E4C3}"
+	ProjectSection(ProjectDependencies) = postProject
+		{20539528-13DA-C5BC-3CFC-4000E67AF8B2} = {20539528-13DA-C5BC-3CFC-4000E67AF8B2}
+		{558D409E-4D79-A3C7-620E-811D61FDCDA8} = {558D409E-4D79-A3C7-620E-811D61FDCDA8}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Klang Effect - Shared Code", "Klang Effect_SharedCode.vcxproj", "{20539528-13DA-C5BC-3CFC-4000E67AF8B2}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Klang Effect - VST3 Manifest Helper", "Klang Effect_VST3ManifestHelper.vcxproj", "{558D409E-4D79-A3C7-620E-811D61FDCDA8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{414EA339-49A3-A674-1F23-B7AB6834E4C3}.Debug|x64.ActiveCfg = Debug|x64
+		{414EA339-49A3-A674-1F23-B7AB6834E4C3}.Debug|x64.Build.0 = Debug|x64
+		{414EA339-49A3-A674-1F23-B7AB6834E4C3}.Release|x64.ActiveCfg = Release|x64
+		{414EA339-49A3-A674-1F23-B7AB6834E4C3}.Release|x64.Build.0 = Release|x64
+		{3DC84EDF-868E-998F-4DB8-83B8B87212FE}.Debug|x64.ActiveCfg = Debug|x64
+		{3DC84EDF-868E-998F-4DB8-83B8B87212FE}.Debug|x64.Build.0 = Debug|x64
+		{3DC84EDF-868E-998F-4DB8-83B8B87212FE}.Release|x64.ActiveCfg = Release|x64
+		{3DC84EDF-868E-998F-4DB8-83B8B87212FE}.Release|x64.Build.0 = Release|x64
+		{20539528-13DA-C5BC-3CFC-4000E67AF8B2}.Debug|x64.ActiveCfg = Debug|x64
+		{20539528-13DA-C5BC-3CFC-4000E67AF8B2}.Debug|x64.Build.0 = Debug|x64
+		{20539528-13DA-C5BC-3CFC-4000E67AF8B2}.Release|x64.ActiveCfg = Release|x64
+		{20539528-13DA-C5BC-3CFC-4000E67AF8B2}.Release|x64.Build.0 = Release|x64
+		{558D409E-4D79-A3C7-620E-811D61FDCDA8}.Debug|x64.ActiveCfg = Debug|x64
+		{558D409E-4D79-A3C7-620E-811D61FDCDA8}.Debug|x64.Build.0 = Debug|x64
+		{558D409E-4D79-A3C7-620E-811D61FDCDA8}.Release|x64.ActiveCfg = Release|x64
+		{558D409E-4D79-A3C7-620E-811D61FDCDA8}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

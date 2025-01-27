@@ -82,7 +82,7 @@ namespace klang {
 		}
 		bool below(unsigned char M, unsigned char m, unsigned char b) const { return !atLeast(M, m, b); }
 	}
-	static constexpr version = { 0, 7, 2, KLANG_DEBUG };
+	static constexpr version = { 0, 7, 6, KLANG_DEBUG };
 
 	/// Klang mode identifiers (e.g. averages, level following)
 	enum Mode { Peak, RMS, Mean };
@@ -94,7 +94,8 @@ namespace klang {
 
 		/// Create a constant from the given value.
 		constexpr constant(double value) noexcept
-			: d(value), f(static_cast<float>(value)), i(static_cast<int>(value)), inv(value == 0.0f ? 0.0f : static_cast<float>(1.0 / value)) { }
+			: d(value), f(static_cast<float>(value)), i(static_cast<int>(value)), inv(value == 0.0f ? 0.0f : static_cast<float>(1.0 / value)) {
+		}
 
 		const double d; //!< Constant as double
 		const float f; //!< Constant as float
@@ -371,16 +372,16 @@ namespace klang {
 		float value;
 
 		/// Create signal from a constant.
-		signal(constant initial) : value(initial.f) { }
+		signal(constant initial) : value(initial.f) {}
 
 		/// Create signal from a 32-bit float..
-		signal(const float initial = 0.f) : value(initial) { }
+		signal(const float initial = 0.f) : value(initial) {}
 
 		/// Create signal from a 64-bit double.
-		signal(const double initial) : value((const float)initial) { }
+		signal(const double initial) : value((const float)initial) {}
 
 		/// Create signal from an 32-bit signed integer.
-		signal(const int value) : value((const float)value) { }
+		signal(const int value) : value((const float)value) {}
 
 		/// Feedback operator (prevents further processing of returned value).
 		const signal& operator<<(const signal& input) {
@@ -492,7 +493,7 @@ namespace klang {
 	IS_SIMPLE_TYPE(signal)
 
 		/// A signal used as an offset relative to another signal.
-		struct relative : public signal { };
+		struct relative : public signal {};
 
 	/// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
 	inline relative signal::operator+() const { return { value }; }
@@ -527,25 +528,25 @@ namespace klang {
 		const signal& operator[](int index) const { return value[index]; }
 
 		/// Create a stereo signal with the given value.
-		signals(float initial = 0.f) : l(initial), r(initial) { }
+		signals(float initial = 0.f) : l(initial), r(initial) {}
 		/// Create a stereo signal with the given value.
-		signals(double initial) : l((float)initial), r((float)initial) { }
+		signals(double initial) : l((float)initial), r((float)initial) {}
 		/// Create a stereo signal with the given value.
-		signals(int initial) : l((float)initial), r((float)initial) { }
+		signals(int initial) : l((float)initial), r((float)initial) {}
 
 		/// Create a stereo signal with the given left and right value.
-		signals(float left, float right) : l(left), r(right) { }
+		signals(float left, float right) : l(left), r(right) {}
 		/// Create a stereo signal with the given left and right value.
-		signals(double left, double right) : l((float)left), r((float)right) { }
+		signals(double left, double right) : l((float)left), r((float)right) {}
 		/// Create a stereo signal with the given left and right value.
-		signals(int left, int right) : l((float)left), r((float)right) { }
+		signals(int left, int right) : l((float)left), r((float)right) {}
 
 		/// Create a multi-channel signal with the given channel values.
 		template <typename... Args, typename = std::enable_if_t<(std::is_convertible_v<Args, signal> && ...)>>
-		signals(Args&... initial) : value{ initial... } { }
+		signals(Args&... initial) : value{ initial... } {}
 		/// Create a multi-channel signal with the given channel values.
 		template <typename... Args, typename = std::enable_if_t<(std::is_scalar_v<Args> && ...)>>
-		signals(Args... initial) : value{ initial... } { }
+		signals(Args... initial) : value{ initial... } {}
 
 		/// Returns the number of channels in the signal.
 		int channels() const { return CHANNELS; }
@@ -649,11 +650,11 @@ namespace klang {
 		const float size; ///< The length of a a full cycle (e.g. 2 pi or wavetable size)
 
 		/// Create a phase increment (default to radians).
-		increment(float amount, const float size = 2 * pi) : amount(amount), size(size) { }
+		increment(float amount, const float size = 2 * pi) : amount(amount), size(size) {}
 		/// Create a phase increment (wavetable size).
-		increment(float amount, int size) : amount(amount), size((float)size) { }
+		increment(float amount, int size) : amount(amount), size((float)size) {}
 		/// Create a phase increment.
-		increment(float amount, double size) : amount(amount), size((float)size) { }
+		increment(float amount, double size) : amount(amount), size((float)size) {}
 
 		/// Set current phase.
 		increment& operator=(float in) { amount = in; return *this; }
@@ -663,10 +664,10 @@ namespace klang {
 
 	/// A signal used as a control parameter.
 	struct param : public signal {
-		param(constant in) : signal(in.f) { }
-		param(const float initial = 0.f) : signal(initial) { }
-		param(const signal& in) : signal(in) { }
-		param(signal& in) : signal(in) { }
+		param(constant in) : signal(in.f) {}
+		param(const float initial = 0.f) : signal(initial) {}
+		param(const signal& in) : signal(in) {}
+		param(signal& in) : signal(in) {}
 		param(Control& in); // see Control declaration
 
 		param& operator+=(const increment& increment) {
@@ -893,7 +894,7 @@ namespace klang {
 	struct Frequency : public param {
 		//INFO("Frequency", 1000.f, -FLT_MAX, FLT_MAX)
 		using param::param;
-		Frequency(float f = 1000.f) : param(f) { };
+		Frequency(float f = 1000.f) : param(f) {};
 	};
 
 	/// Sample rate constants
@@ -905,7 +906,7 @@ namespace klang {
 		float w;        ///< angular frequency (omega)
 		float nyquist;  ///< nyquist frequency (f / 2)
 
-		SampleRate(float sr) : f(sr), i(int(sr + 0.001f)), d((double)sr), inv(1.f / sr), w(2.0f * pi * inv), nyquist(sr / 2.f) { }
+		SampleRate(float sr) : f(sr), i(int(sr + 0.001f)), d((double)sr), inv(1.f / sr), w(2.0f * pi * inv), nyquist(sr / 2.f) {}
 
 		operator float() { return f; }
 	} fs(44100); // sample rate
@@ -917,7 +918,7 @@ namespace klang {
 		//INFO("dB", 0.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 
-		dB(float gain = 0.f) : param(gain) { };
+		dB(float gain = 0.f) : param(gain) {};
 
 		const dB* operator->() const {
 			Amplitude = power(10, value * 0.05f);
@@ -932,7 +933,7 @@ namespace klang {
 		//INFO("Gain", 1.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 
-		Amplitude(float a = 1.f) : param(a) { };
+		Amplitude(float a = 1.f) : param(a) {};
 		Amplitude(const dB& db) {
 			value = power(10, db.value * 0.05f); // 10 ^ (db * 0.05f);
 		};
@@ -977,7 +978,8 @@ namespace klang {
 		struct Size
 		{
 			Size(int x = -1, int y = -1, int width = -1, int height = -1)
-				: x(x), y(y), width(width), height(height) { }
+				: x(x), y(y), width(width), height(height) {
+			}
 
 			int x;
 			int y;
@@ -1081,8 +1083,8 @@ namespace klang {
 	struct ControlMap {
 		Control* control;
 
-		ControlMap() : control(nullptr) { };
-		ControlMap(Control& control) : control(&control) { };
+		ControlMap() : control(nullptr) {};
+		ControlMap(Control& control) : control(&control) {};
 
 		operator Control& () { return *control; }
 		operator signal& () { return control->value; }
@@ -1097,7 +1099,7 @@ namespace klang {
 
 	IS_SIMPLE_TYPE(Control);
 
-	inline param::param(Control& in) : signal(in.value) { }
+	inline param::param(Control& in) : signal(in.value) {}
 
 	inline static Control Dial(const char* name, float min = 0.f, float max = 1.f, float initial = 0.f, Control::Size size = Automatic)
 	{
@@ -1161,21 +1163,21 @@ namespace klang {
 		Control::Size size;
 		std::vector<Control> controls;
 
-		Group(const char* name, std::initializer_list<Control> controls) : name(name), size(Automatic), controls{ controls } { }
+		Group(const char* name, std::initializer_list<Control> controls) : name(name), size(Automatic), controls{ controls } {}
 
 		template <typename... Controls>
-		Group(const char* name, Controls... ctrls) : name(name), size(Automatic), controls{ std::forward<Controls>(ctrls)... } { }
+		Group(const char* name, Controls... ctrls) : name(name), size(Automatic), controls{ std::forward<Controls>(ctrls)... } {}
 
 		template <typename... Controls>
-		Group(Controls... ctrls) : name(""), size(Automatic), controls{ std::forward<Controls>(ctrls)... } { }
+		Group(Controls... ctrls) : name(""), size(Automatic), controls{ std::forward<Controls>(ctrls)... } {}
 
-		Group(const char* name, Control::Size size, std::initializer_list<Control> controls) : name(name), size(size), controls{ controls } { }
-
-		template <typename... Controls>
-		Group(const char* name, Control::Size size, Controls... ctrls) : name(name), size(size), controls{ std::forward<Controls>(ctrls)... } { }
+		Group(const char* name, Control::Size size, std::initializer_list<Control> controls) : name(name), size(size), controls{ controls } {}
 
 		template <typename... Controls>
-		Group(Control::Size size, Controls... ctrls) : name(""), size(size), controls{ std::forward<Controls>(ctrls)... } { }
+		Group(const char* name, Control::Size size, Controls... ctrls) : name(name), size(size), controls{ std::forward<Controls>(ctrls)... } {}
+
+		template <typename... Controls>
+		Group(Control::Size size, Controls... ctrls) : name(""), size(size), controls{ std::forward<Controls>(ctrls)... } {}
 	};
 
 	/// Plugin UI controls
@@ -1438,7 +1440,7 @@ namespace klang {
 		/// Audio input object
 		template<typename SIGNAL>
 		struct Input {
-			virtual ~Input() { }
+			virtual ~Input() {}
 			SIGNAL in = { 0.f };
 
 			// retrieve current input
@@ -1450,7 +1452,7 @@ namespace klang {
 
 		protected:
 			// preprocess input (default: none)
-			virtual void input() { }
+			virtual void input() {}
 		};
 
 		/// Audio output object
@@ -1522,22 +1524,22 @@ namespace klang {
 		protected:
 			// overrideable parameter setting (up to 8 parameters)
 			/// @cond
-			virtual void set(param) { };
-			virtual void set(relative) { }; // relative alternative
-			virtual void set(param, param) { };
-			virtual void set(param, relative) { }; // relative alternative
-			virtual void set(param, param, param) { };
-			virtual void set(param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param) { };
-			virtual void set(param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param) { };
-			virtual void set(param, param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param, param) { };
-			virtual void set(param, param, param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param, param, param) { };
-			virtual void set(param, param, param, param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param, param, param, param) { };
-			virtual void set(param, param, param, param, param, param, param, relative) { }; // relative alternative
+			virtual void set(param) {};
+			virtual void set(relative) {}; // relative alternative
+			virtual void set(param, param) {};
+			virtual void set(param, relative) {}; // relative alternative
+			virtual void set(param, param, param) {};
+			virtual void set(param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param) {};
+			virtual void set(param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param) {};
+			virtual void set(param, param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param, param) {};
+			virtual void set(param, param, param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param, param, param) {};
+			virtual void set(param, param, param, param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param, param, param, param) {};
+			virtual void set(param, param, param, param, param, param, param, relative) {}; // relative alternative
 			/// @endcond
 		};
 
@@ -1547,7 +1549,7 @@ namespace klang {
 			using Input<SIGNAL>::in;
 			using Output<SIGNAL>::out;
 
-			virtual ~Modifier() { }
+			virtual ~Modifier() {}
 
 			// signal processing (input-output)
 			operator const SIGNAL& () override { process(); return out; } // return processed output
@@ -1564,29 +1566,29 @@ namespace klang {
 		protected:
 			// overrideable parameter setting (up to 8 parameters)
 			/// @cond
-			virtual void set(param) { };
-			virtual void set(relative) { }; // relative alternative
-			virtual void set(param, param) { };
-			virtual void set(param, relative) { }; // relative alternative
-			virtual void set(param, param, param) { };
-			virtual void set(param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param) { };
-			virtual void set(param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param) { };
-			virtual void set(param, param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param, param) { };
-			virtual void set(param, param, param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param, param, param) { };
-			virtual void set(param, param, param, param, param, param, relative) { }; // relative alternative
-			virtual void set(param, param, param, param, param, param, param, param) { };
-			virtual void set(param, param, param, param, param, param, param, relative) { }; // relative alternative
+			virtual void set(param) {};
+			virtual void set(relative) {}; // relative alternative
+			virtual void set(param, param) {};
+			virtual void set(param, relative) {}; // relative alternative
+			virtual void set(param, param, param) {};
+			virtual void set(param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param) {};
+			virtual void set(param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param) {};
+			virtual void set(param, param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param, param) {};
+			virtual void set(param, param, param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param, param, param) {};
+			virtual void set(param, param, param, param, param, param, relative) {}; // relative alternative
+			virtual void set(param, param, param, param, param, param, param, param) {};
+			virtual void set(param, param, param, param, param, param, param, relative) {}; // relative alternative
 			/// @endcond
 		};
 
 		/// Applies a function to a signal (input-output)
 		template<typename SIGNAL, typename... Args>
 		struct Function : public Generic::Modifier<SIGNAL> {
-			virtual ~Function() { }
+			virtual ~Function() {}
 
 			using Modifier<SIGNAL>::in;
 			using Modifier<SIGNAL>::out;
@@ -1647,11 +1649,12 @@ namespace klang {
 			}
 
 			template<typename FunctionPtr>
-			Function() : function(nullptr) { }
+			Function() : function(nullptr) {}
 
 			template<typename FunctionPtr>
 			Function(FunctionPtr function)
-				: function(std::forward<FunctionPtr>(function)) {}
+				: function(std::forward<FunctionPtr>(function)) {
+			}
 
 			template<typename FunctionPtr, typename... OtherArgs>
 			Function(FunctionPtr function, OtherArgs... args)
@@ -1788,7 +1791,7 @@ namespace klang {
 		/// A line graph plotter
 		template<int SIZE>
 		struct Graph {
-			virtual ~Graph() { };
+			virtual ~Graph() {};
 
 			size_t capacity() const { return SIZE; }
 
@@ -1806,7 +1809,7 @@ namespace klang {
 
 			/// Data series
 			struct Series : public Array<Point, SIZE + 1>, Input<signal> {
-				virtual ~Series() { }
+				virtual ~Series() {}
 
 				const void* function = nullptr;
 				uint64_t hash = 0;
@@ -2109,7 +2112,7 @@ namespace klang {
 			Frequency frequency = 1000.f;	// fundamental frequency of oscillator (in Hz)
 			Phase offset = 0;				// phase offset (in radians - e.g. for modulation)
 
-			virtual ~Oscillator() { }
+			virtual ~Oscillator() {}
 			virtual void reset() { position = 0; }
 
 			using Generator<SIGNAL>::set;
@@ -2135,15 +2138,15 @@ namespace klang {
 	}
 
 	/// Audio input object (mono)
-	struct Input : Generic::Input<signal> { };
+	struct Input : Generic::Input<signal> {};
 	/// Audio output object (mono)
-	struct Output : Generic::Output<signal> { };
+	struct Output : Generic::Output<signal> {};
 	/// Signal generator object (mono)
-	struct Generator : Generic::Generator<signal> { };
+	struct Generator : Generic::Generator<signal> {};
 	/// Signal modifier object (mono input-output)
-	struct Modifier : public Generic::Modifier<signal> { };
+	struct Modifier : public Generic::Modifier<signal> {};
 	/// Audio oscillator object  (mono output)
-	struct Oscillator : Generic::Oscillator<signal> { };
+	struct Oscillator : Generic::Oscillator<signal> {};
 
 	/// @cond
 	template <typename TYPE, typename SIGNAL>
@@ -2187,9 +2190,9 @@ namespace klang {
 
 		//Function() : Generic::Function<signal, float>([](float x) -> float { return x; }) { }
 
-		Function() : Generic::Function<signal, Args...>(nullptr) { }
+		Function() : Generic::Function<signal, Args...>(nullptr) {}
 
-		Function(std::function<float(Args...)> function) : Generic::Function<signal, Args...>(function) { }
+		Function(std::function<float(Args...)> function) : Generic::Function<signal, Args...>(function) {}
 
 		using Generic::Function<signal, Args...>::operator>>;
 	};
@@ -2392,7 +2395,7 @@ namespace klang {
 			using buffer::operator++;
 			using buffer::operator signal&;
 
-			Buffer() : buffer(16384) { }
+			Buffer() : buffer(16384) {}
 
 			enum Content {
 				Empty = 0,
@@ -2563,7 +2566,7 @@ namespace klang {
 		int i = 0;
 		TYPE sum = 0;
 
-		Result(TYPE* array, int index) : y(&array[index]), i(index) { }
+		Result(TYPE* array, int index) : y(&array[index]), i(index) {}
 
 		TYPE& operator[](int index) {
 			return *(y + index);
@@ -2759,7 +2762,7 @@ namespace klang {
 		buffer buffer;
 		const int size;
 	public:
-		Wavetable(int size = 2048) : buffer(size), size(size) { }
+		Wavetable(int size = 2048) : buffer(size), size(size) {}
 
 		template<typename TYPE>
 		Wavetable(TYPE oscillator, int size = 2048) : buffer(size), size(size) {
@@ -2831,7 +2834,7 @@ namespace klang {
 				setTime(time);
 			}
 
-			virtual ~Ramp() { }
+			virtual ~Ramp() {}
 
 			// Is ramp currently processing (ramping)?
 			bool isActive() const {
@@ -2900,10 +2903,10 @@ namespace klang {
 		struct Point {
 			float x, y;
 
-			Point() : x(0), y(0) { }
+			Point() : x(0), y(0) {}
 
 			template<typename T1, typename T2>
-			Point(T1 x, T2 y) : x(float(x)), y(float(y)) { }
+			Point(T1 x, T2 y) : x(float(x)), y(float(y)) {}
 		};
 
 		/// @cond
@@ -2960,7 +2963,7 @@ namespace klang {
 		// Creates a copy of an envelope from another envelope
 		Envelope(const Envelope& in) : ramp(new Linear()) { set(in.points); }
 
-		virtual ~Envelope() { }
+		virtual ~Envelope() {}
 
 		// Checks if the envelope is at a specified stage (Sustain, Release, Off)
 		bool operator==(Stage stage) const { return Envelope::stage == stage; }
@@ -3267,9 +3270,9 @@ namespace klang {
 	/// Base class for UI / MIDI controll
 	struct Controller {
 	protected:
-		virtual event control(int index, float value) { };
-		virtual event preset(int index) { };
-		virtual event midi(int status, int byte1, int byte2) { };
+		virtual event control(int index, float value) {};
+		virtual event preset(int index) {};
+		virtual event midi(int status, int byte1, int byte2) {};
 	public:
 		virtual void onControl(int index, float value) { control(index, value); };
 		virtual void onPreset(int index) { preset(index); };
@@ -3278,7 +3281,7 @@ namespace klang {
 
 	/// Base class for mini-plugin
 	struct Plugin : public Controller {
-		virtual ~Plugin() { }
+		virtual ~Plugin() {}
 
 		Controls controls;
 		Presets presets;
@@ -3286,15 +3289,15 @@ namespace klang {
 
 	/// Effect mini-plugin (mono)
 	struct Effect : public Plugin, public Modifier {
-		virtual ~Effect() { }
+		virtual ~Effect() {}
 
-		virtual void prepare() { };
+		virtual void prepare() {};
 		virtual void process() { out = in; }
 		virtual void process(buffer buffer) {
 			prepare();
 			while (!buffer.finished()) {
 				input(buffer);
-				process();
+				this->process();
 				buffer++ = out;
 				debug.buffer++;
 			}
@@ -3318,7 +3321,7 @@ namespace klang {
 		};
 
 	protected:
-		virtual event on(Pitch p, Velocity v) { }
+		virtual event on(Pitch p, Velocity v) {}
 		virtual event off(Velocity v = 0) { stage = Off; }
 
 		SYNTH* getSynth() { return synth; }
@@ -3327,8 +3330,8 @@ namespace klang {
 		Velocity velocity;
 		Controls controls;
 
-		NoteBase() : synth(nullptr) { }
-		virtual ~NoteBase() { }
+		NoteBase() : synth(nullptr) {}
+		virtual ~NoteBase() {}
 
 		void attach(SYNTH* synth) {
 			NoteBase::synth = synth;
@@ -3336,7 +3339,7 @@ namespace klang {
 			init();
 		}
 
-		virtual void init() { }
+		virtual void init() {}
 
 		virtual void start(Pitch p, Velocity v) {
 			stage = Onset;
@@ -3374,12 +3377,12 @@ namespace klang {
 
 	/// Synthesiser note (mono)
 	struct Note : public NoteBase<Synth>, public Generator {
-		virtual void prepare() { }
+		virtual void prepare() {}
 		virtual void process() override = 0;
 		virtual bool process(buffer buffer) {
 			prepare();
 			while (!buffer.finished()) {
-				process();
+				this->process();
 				buffer++ = out;
 				debug.buffer++;
 			}
@@ -3419,7 +3422,7 @@ namespace klang {
 
 		int assign() {
 			// favour unused voices
-			for (int i = 0; i < count; i++) {
+			for (unsigned int i = 0; i < count; i++) {
 				if (items[i]->stage == NOTE::Off) {
 					noteStart[i] = noteOns++;
 					return i;
@@ -3429,7 +3432,7 @@ namespace klang {
 			// no free notes => steal oldest released note?
 			int oldest = -1;
 			unsigned int oldest_start = 0;
-			for (int i = 0; i < count; i++) {
+			for (unsigned int i = 0; i < count; i++) {
 				if (items[i]->stage == NOTE::Release) {
 					if (oldest == -1 || noteStart[i] < oldest_start) {
 						oldest = i;
@@ -3445,7 +3448,7 @@ namespace klang {
 			// no available released notes => steal oldest playing note
 			oldest = -1;
 			oldest_start = 0;
-			for (int i = 0; i < count; i++) {
+			for (unsigned int i = 0; i < count; i++) {
 				if (oldest == -1 || noteStart[i] < oldest_start) {
 					oldest = i;
 					oldest_start = noteStart[i];
@@ -3462,8 +3465,8 @@ namespace klang {
 
 		Notes<Synth, Note> notes;
 
-		Synth() : notes(this) { }
-		virtual ~Synth() { }
+		Synth() : notes(this) {}
+		virtual ~Synth() {}
 
 		//virtual void presetLoaded(int preset) { }
 		//virtual void optionChanged(int param, int item) { }
@@ -3483,15 +3486,71 @@ namespace klang {
 		virtual event onControl(int index, float value) override {
 			control(index, value);
 			for (unsigned int n = 0; n < notes.count; n++)
-				notes[n]->onControl(index, value);
+				if (notes[n]->stage != Note::Off)
+					notes[n]->onControl(index, value);
 		};
+
+		// pass to synth and notes
+		virtual event onMIDI(int status, int byte1, int byte2) override {
+			onMIDI(status, byte1, byte2);
+			for (unsigned int n = 0; n < notes.count; n++)
+				if (notes[n]->stage != Note::Off)
+					notes[n]->onMIDI(status, byte1, byte2);
+		}
 
 		// pass to synth and notes
 		virtual event onPreset(int index) override {
 			preset(index);
 			for (unsigned int n = 0; n < notes.count; n++)
-				notes[n]->onPreset(index);
+				if (notes[n]->stage != Note::Off)
+					notes[n]->onPreset(index);
 		};
+
+		// assign and start note
+		virtual event noteOn(int pitch, float velocity) {
+			const int n = notes.assign();
+			if (n != -1)
+				notes[n]->start((float)pitch, velocity);
+		}
+
+		// trigger note off (release)
+		virtual event noteOff(int pitch, float velocity) {
+			for (unsigned int n = 0; n < notes.count; n++)
+				if (notes[n]->pitch == pitch && notes[n]->stage == Note::Sustain)
+					notes[n]->release(velocity);
+		}
+
+		// post processing (see Effect::process)
+		virtual void process() override { out = in; }
+		virtual void process(buffer buffer) override { Effect::process(buffer); }
+
+		virtual void process(float* buffer, int length, float* parameters = nullptr) {
+			klang::buffer mono(buffer, length);
+
+			// sync parameters
+			if (parameters) {
+				for (unsigned int c = 0; c < controls.size(); c++)
+					controls[c].set(parameters[c]);
+			}
+
+			// generate note audio
+			for (unsigned int n = 0; n < notes.count; n++) {
+				Note* note = notes[n];
+				if (note->stage != Note::Off) {
+					if (!note->process(mono))
+						note->stop();
+				}
+			}
+
+			// apply post processing
+			this->process(mono);
+
+			// sync update (changed by process())
+			if (parameters) {
+				for (unsigned int c = 0; c < controls.size(); c++)
+					parameters[c] = controls[c].value;
+			}
+		}
 	};
 
 	template<class SYNTH, class NOTE>
@@ -3516,8 +3575,8 @@ namespace klang {
 			mono::signal& l;
 			mono::signal& r;
 
-			frame(mono::signal& left, mono::signal& right) : l(left), r(right) { }
-			frame(signal& signal) : l(signal.l), r(signal.r) { }
+			frame(mono::signal& left, mono::signal& right) : l(left), r(right) {}
+			frame(signal& signal) : l(signal.l), r(signal.r) {}
 
 			frame& operator+=(const frame& x) { l += x.l; r += x.r; return *this; }
 			frame& operator-=(const frame& x) { l -= x.l; r -= x.r; return *this; }
@@ -3669,7 +3728,7 @@ namespace klang {
 
 		/// Stereo audio object adapter
 		template<class TYPE>
-		struct Bank : klang::Bank<TYPE, 2> { };
+		struct Bank : klang::Bank<TYPE, 2> {};
 
 		/// Audio delay object (stereo)
 		template<int SIZE>
@@ -3684,7 +3743,7 @@ namespace klang {
 			}
 
 			klang::Delay<SIZE>& l, & r;
-			Delay<SIZE>() : l(items[0]), r(items[1]) { }
+			Delay<SIZE>() : l(items[0]), r(items[1]) {}
 
 			signal tap(int delay) const {
 				int read = (items[0].position - 1) - delay;
@@ -3729,9 +3788,9 @@ namespace klang {
 
 		/// Stereo effect mini-plugin
 		struct Effect : public Plugin, public Modifier {
-			virtual ~Effect() { }
+			virtual ~Effect() {}
 
-			virtual void prepare() { };
+			virtual void prepare() {};
 			virtual void process() { out = in; };
 			virtual void process(Stereo::buffer buffer) {
 				prepare();
@@ -3750,13 +3809,13 @@ namespace klang {
 		struct Note : public NoteBase<Synth>, public Generator {
 			//virtual signal output() { return 0; };
 
-			virtual void prepare() { }
+			virtual void prepare() {}
 			virtual void process() override = 0;
 			virtual bool process(Stereo::buffer buffer) {
 				prepare();
 				while (!buffer.finished()) {
 					process();
-					buffer++ = out;
+					buffer++ += out;
 				}
 				return !finished();
 			}
@@ -3766,30 +3825,123 @@ namespace klang {
 			}
 		};
 
+		namespace Mono {
+			struct Note : public Stereo::Note, public klang::Mono::Generator {
+				using klang::Mono::Generator::out;
+
+				virtual void prepare() override {}
+				virtual void process() override = 0;
+				virtual bool process(Stereo::buffer buffer) override {
+					prepare();
+					while (!buffer.finished()) {
+						this->process();
+						buffer.left += out;
+						buffer.right += out;
+						buffer++;
+					}
+					return !finished();
+				}
+			};
+		}
+
 		/// Synthesier mini-plugin (stereo)
 		struct Synth : public Effect {
 			typedef Stereo::Note Note;
+
+			struct Mono { typedef Stereo::Mono::Note Note; };
 
 			/// Synthesiser note array (stereo)
 			struct Notes : klang::Notes<Synth, Note> {
 				using klang::Notes<Synth, Note>::Notes;
 			} notes;
 
-			Synth() : notes(this) { }
-			virtual ~Synth() { }
+			Synth() : notes(this) {}
+			virtual ~Synth() {}
 
-			virtual void presetLoaded(int preset) { }
-			virtual void optionChanged(int param, int item) { }
-			virtual void buttonPressed(int param) { };
+			//virtual void presetLoaded(int preset) { }
+			//virtual void optionChanged(int param, int item) { }
+			//virtual void buttonPressed(int param) { };
 
 			int indexOf(Note* note) const {
 				int index = 0;
 				for (const auto* n : notes.items) {
-					if (note == n) return
-						index;
+					if (note == n)
+						return index;
 					index++;
 				}
 				return -1; // not found
+			}
+
+			// pass to synth and notes
+			virtual event onControl(int index, float value) override {
+				control(index, value);
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->onControl(index, value);
+			};
+
+			// pass to synth and notes
+			virtual event onMIDI(int status, int byte1, int byte2) override {
+				onMIDI(status, byte1, byte2);
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->onMIDI(status, byte1, byte2);
+			}
+
+			// pass to synth and notes
+			virtual event onPreset(int index) override {
+				preset(index);
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->onPreset(index);
+			};
+
+			// assign and start note
+			virtual event noteOn(int pitch, float velocity) {
+				const int n = notes.assign();
+				if (n != -1)
+					notes[n]->start((float)pitch, velocity);
+			}
+
+			// trigger note off (release)
+			virtual event noteOff(int pitch, float velocity) {
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->pitch == pitch && notes[n]->stage == Note::Sustain)
+						notes[n]->release(velocity);
+			}
+
+			// post processing (see Effect::process)
+			virtual void process() override { out = in; }
+			virtual void process(buffer buffer) override { Effect::process(buffer); }
+
+			virtual void process(float** buffers, int length, float* parameters = nullptr) {
+				klang::buffer left(buffers[0], length);
+				klang::buffer right(buffers[1], length);
+				klang::Stereo::buffer buffer(left, right);
+
+				// sync parameters
+				if (parameters) {
+					for (unsigned int c = 0; c < controls.size(); c++)
+						controls[c].set(parameters[c]);
+				}
+
+				// generate note audio
+				for (unsigned int n = 0; n < notes.count; n++) {
+					Note* note = notes[n];
+					if (note->stage != Note::Off) {
+						if (!note->process(buffer))
+							note->stop();
+					}
+				}
+
+				// apply post processing
+				this->process(buffer);
+
+				// sync update (changed by process())
+				if (parameters) {
+					for (unsigned int c = 0; c < controls.size(); c++)
+						parameters[c] = controls[c].value;
+				}
 			}
 		};
 	}
@@ -4111,7 +4263,7 @@ namespace klang {
 				using Waveform = float(OSM::*)();
 				const Waveform waveform;
 
-				OSM(Waveform waveform) : waveform(waveform) { }
+				OSM(Waveform waveform) : waveform(waveform) {}
 
 				enum State { // carry:old_up:new_up
 					NewUp = 0b001, NewDown = 0b000,
@@ -4305,12 +4457,12 @@ namespace klang {
 		namespace Wavetables {
 			/// Sine wave oscillator (wavetable)
 			struct Sine : public Wavetable {
-				Sine() : Wavetable(Basic::Sine()) { }
+				Sine() : Wavetable(Basic::Sine()) {}
 			};
 
 			/// Saw wave oscillator (wavetable)
 			struct Saw : public Wavetable {
-				Saw() : Wavetable(Basic::Saw()) { }
+				Saw() : Wavetable(Basic::Saw()) {}
 			};
 		}
 	};
@@ -4322,7 +4474,7 @@ namespace klang {
 
 					/// Basic one-pole IIR filter.
 		struct IIR : public Modifier {
-			virtual ~IIR() { }
+			virtual ~IIR() {}
 
 			float a, b;
 
@@ -4341,7 +4493,7 @@ namespace klang {
 		{
 			/// Abstract filter class
 			struct Filter : Modifier {
-				virtual ~Filter() { }
+				virtual ~Filter() {}
 
 				float f = 0; 		// cutoff f
 				//float shelf = 1;	// shelving gain
@@ -4377,7 +4529,7 @@ namespace klang {
 
 			/// Low-pass filter (LPF)
 			struct LPF : Filter {
-				virtual ~LPF() { }
+				virtual ~LPF() {}
 
 				void init() {
 					const float exp0 = expf(-f * fs.w);
@@ -4392,7 +4544,7 @@ namespace klang {
 
 			/// High-pass filter (HPF)
 			struct HPF : Filter {
-				virtual ~HPF() { }
+				virtual ~HPF() {}
 
 				void init() {
 					const float exp0 = expf(-f * fs.w);
@@ -4407,7 +4559,7 @@ namespace klang {
 		namespace Butterworth {
 			/// Low-pass filter (LPF).
 			struct LPF : OnePole::Filter {
-				virtual ~LPF() { }
+				virtual ~LPF() {}
 
 				void init() {
 					const float c = 1.f / tanf(pi * f * fs.inv);
@@ -4428,7 +4580,7 @@ namespace klang {
 			/// Abstract filter class
 			struct Filter : Modifier
 			{
-				virtual ~Filter() { }
+				virtual ~Filter() {}
 
 				float f = 0; 	// cutoff/centre f
 				float Q = 0;	// Q (resonance)
@@ -4450,8 +4602,11 @@ namespace klang {
 					z[0] = z[1] = 0;
 				}
 
-				/// Set the filter cutoff (and Q)
-				void set(param f, param Q = root2.inv) {
+				/// Set the filter cutoff (default Q)
+				void set(param f) { set(f, root2.inv); }
+
+				/// Set the filter cutoff and Q
+				void set(param f, param Q) {
 					if (Filter::f != f || Filter::Q != Q) {
 						Filter::f = f;
 						Filter::Q = Q;
@@ -4481,7 +4636,7 @@ namespace klang {
 
 			/// Low-pass filter (LPF)
 			struct LPF : Filter {
-				virtual ~LPF() { }
+				virtual ~LPF() {}
 
 				void init() override {
 					constant a0 = { 1.f + a };
@@ -4498,7 +4653,7 @@ namespace klang {
 
 			/// High-pass filter (HPF)
 			struct HPF : Filter {
-				virtual ~HPF() { }
+				virtual ~HPF() {}
 
 				void init() {
 					constant a0 = { 1.f + a };
