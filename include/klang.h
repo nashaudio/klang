@@ -4602,8 +4602,11 @@ namespace klang {
 					z[0] = z[1] = 0;
 				}
 
-				/// Set the filter cutoff (and Q)
-				void set(param f, param Q = root2.inv) {
+				/// Set the filter cutoff (default Q)
+				void set(param f) { set(f, root2.inv); }
+
+				/// Set the filter cutoff and Q
+				void set(param f, param Q) {
 					if (Filter::f != f || Filter::Q != Q) {
 						Filter::f = f;
 						Filter::Q = Q;
