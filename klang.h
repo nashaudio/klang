@@ -82,7 +82,7 @@ namespace klang {
 		}
 		bool below(unsigned char M, unsigned char m, unsigned char b) const { return !atLeast(M, m, b); }
 	}
-	static constexpr version = { 0, 7, 6, KLANG_DEBUG };
+	static constexpr version = { 0, 7, 7, KLANG_DEBUG };
 
 	/// Klang mode identifiers (e.g. averages, level following)
 	enum Mode { Peak, RMS, Mean };
@@ -319,6 +319,698 @@ namespace klang {
 
 		/// Construct an empty array.
 		Array() = default; // Default constructor to allow empty initialization
+	};
+
+	struct Memory
+	{
+		typedef unsigned char Byte;
+		typedef Byte* Pointer;
+
+		Pointer start, ptr, end;
+		size_t size;
+		bool owned;
+
+		Memory() {
+			detach();
+		}
+
+		Memory(size_t size) {
+			create(size);
+		}
+
+		~Memory() {
+			free();
+		}
+
+		// attach to an existing buffer
+		void attach(unsigned char* data, size_t size, bool own = false) {
+			Memory::size = size;
+			start = ptr = data;
+			end = start + size;
+			owned = own;
+		}
+
+		// detach from the buffer (without freeing it)
+		void detach() {
+			start = ptr = end = nullptr;
+			size = 0;
+			owned = false;
+		}
+
+		// allocate memory
+		bool create(size_t size) {
+			free();
+			start = ptr = new Byte[size];
+			if (start) {
+				Memory::size = size;
+				end = start + size;
+				owned = true;
+				return true;
+			}
+			return false;
+		}
+
+		// clear memory
+		void clear() {
+			memset(start, 0, size);
+		}
+
+		// rewind memory to start
+		void rewind() {
+			ptr = start;
+		}
+
+		// rewind memory
+		void rewind(int bytes) {
+			ptr -= bytes;
+		}
+
+		// skip / fastforward memory
+		void skip(int bytes) {
+			ptr += bytes;
+		}
+
+		// release memory
+		void free() {
+			if (owned && start) {
+				ptr = end = nullptr;
+				delete[] start;
+				start = nullptr;
+				size = 0;
+			}
+		}
+
+		// check if pointer is at end of memory
+		bool finished() const {
+			return ptr >= end;
+		}
+
+		// return memory-mapped file pointer
+		FILE* file() {
+			FILE* f = fopen("/dev/null", "wt");
+			if (!f) f = fopen("nul", "wt");
+			setvbuf(f, (char*)start, _IOFBF, size);
+			return f;
+		}
+
+		bool load(const char* path) {
+			FILE* f = fopen(path, "rb");
+			if (!f) return false;
+
+			// find out length of file
+			fseek(f, 0, SEEK_END);
+			size_t length = ftell(f);
+			fseek(f, 0, SEEK_SET);
+
+			// allocate memory and read file
+			if (!create(length)) {
+				fclose(f);
+				return false;
+			}
+			fread(start, 1, length, f);
+			fclose(f);
+
+			return true;
+		}
+
+		// retrieve the next value from memory
+		template<typename TYPE>
+		bool get(TYPE& value) {
+			if (ptr + sizeof(TYPE) > end) {
+				ptr = end;
+				return false;
+			}
+			value = *(TYPE*)ptr;
+			ptr += sizeof(TYPE);
+			return true;
+		}
+
+		// retrieve the next value from memory
+		template<typename TYPE>
+		operator TYPE() {
+			TYPE value;
+			get(value);
+			return value;
+		}
+
+		// add a value to the memory
+		template<typename TYPE>
+		bool add(const TYPE& value) {
+			if (ptr + sizeof(TYPE) > end)
+				return false;
+			*(TYPE*)ptr = value;
+			ptr += sizeof(TYPE);
+			return true;
+		}
+
+		// add a value to the memory
+		template<typename TYPE>
+		Memory& operator+=(const TYPE& value) {
+			add(value);
+			return *this;
+		}
+
+		// check if memory is equal to a value
+		template<typename TYPE>
+		bool operator==(const TYPE& value) const {
+			if (ptr + sizeof(TYPE) > end)
+				return false;
+			return value == *(TYPE*)ptr;
+		}
+
+		// copy memory from another memory object (with resize)
+		Memory& operator=(const Memory& memory) {
+			if (ptr + memory.size > end)
+				return *this;
+			create(memory.size);
+			memcpy(start, memory.start, memory.size);
+			return *this;
+		}
+
+		// attach memory to another memory object
+		Memory& operator=(Memory* memory) {
+			free();
+			attach(memory->start, memory->size);
+			return *this;
+		}
+
+		// add memory data from another memory object
+		Memory& operator+=(const Memory& memory) {
+			if (ptr + memory.size > end)
+				return *this;
+			memcpy(ptr, memory.start, memory.size);
+			ptr += memory.size;
+			return *this;
+		}
+
+		//operator int() {
+		//	if (ptr + sizeof(int) > end) {
+		//		ptr = end;
+		//		return 0;
+		//	}
+		//	ptr += sizeof(int);
+		//	return *(int*)(ptr - sizeof(int));
+		//}
+
+		//operator float() {
+		//	if (ptr + sizeof(float) > end) {
+		//		ptr = end;
+		//		return 0;
+		//	}
+		//	ptr += sizeof(float);
+		//	return *(float*)(ptr - sizeof(float));
+		//}
+
+	//	int geti1() {
+	//		if ((++_ptr) > _end) {
+	//			if (_ptr == _end)
+	//				return (*(BYTE*)(_ptr - 1));
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return (*(int*)(_ptr - 1)) & 0xFF;
+	//	}
+
+	//	int geti2() {
+	//		if ((_ptr += 2) >/*=*/ _end) {
+	//			//            if(_ptr == _end)
+	//			//                return (*(short*)(_ptr - 2));
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return (*(int*)(_ptr - 2)) & 0xFFFF;
+	//	}
+
+	//	//	int geti3() {
+	//	//		if ((_ptr += 3) > _end) {
+	//	//			_ptr = _end;
+	//	//			return 0;
+	//	//		}
+	//	//		return (*(int*)(_ptr - 3)) & 0xFFFFFF;
+	//	//	}
+
+	//	int geti4() {
+	//		if ((_ptr += 4) > _end) {
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return (*(int*)(_ptr - 4)) & 0xFFFFFFFF;
+	//	}
+
+	//	int geti(const int size) {
+	//		switch (size) {
+	//		case 1: return geti1();
+	//		case 2: return geti2();
+	//			//		case 3: return geti3();
+	//		case 4: return geti4();
+	//		default:
+	//			int number = getc();
+	//			for (int i = 1; i < size; i++)           // (collate bytes into multi-byte integer)
+	//				number += (1 << (i * 8)) * getc();  // pow(256.0,  i) * getc();		//
+	//			return number;							// (return results)
+	//		}
+	//	}
+
+	//	int getbe(int size) {
+	//		int number = getc();
+	//		while (--size) {
+	//			number <<= 8;
+	//			number += getc();
+	//		}
+	//		return number;
+	//	}
+
+	//	bool putc(char c) {
+	//		if (_ptr < _end) {
+	//			*_ptr++ = c;
+	//			return true;
+	//		}
+	//		return false;
+	//	}
+
+	//	size_t write(const void* src, const size_t size, const size_t count) {
+	//		if ((_ptr + size * count) <= _end) {
+	//			memcpy(_ptr, src, size * count);
+	//			_ptr += size * count;
+	//			return size;
+	//		}
+	//		else {
+	//			_ptr = _end;
+	//		}
+	//		return 0;
+	//	}
+
+	//	/*int getshort(){
+	//		_ptr+=sizeof(short);
+	//		if(_ptr > _end){
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return *(int*)(_ptr-sizeof(short));
+	//	}
+
+	//	int getint(){
+	//		_ptr+=sizeof(int);
+	//		if(_ptr > _end){
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return *(int*)(_ptr-sizeof(int));
+	//	}*/
+
+	//	bool eof() const {
+	//		return _ptr >= _end;
+	//	}
+
+	//	int getvari(void)
+	//	{
+	//		int    value;
+	//		short	c;
+
+	//		if ((value = getc()) & 0x80) {
+	//			value &= 0x7f;
+	//			do {
+	//				value = (value << 7) + ((c = getc()) & 0x7f);
+	//			} while (c & 0x80);
+	//		}
+	//		return value;
+	//	}
+
+	//	char* gets(int length) {
+	//		if ((_ptr + length) >= _end) {
+	//			_ptr = _end;
+	//			_string[0] = 0;
+	//		}
+	//		else {
+	//			memcpy(_string, _ptr, MIN(length, 255));
+	//			_string[MIN(length, 255)] = 0;
+	//			_ptr += length;
+	//		}
+	//		return _string;
+	//	}
+
+	//	char* gets0(int length) {
+	//		if ((_ptr + length) >= _end) {
+	//			_ptr = _end;
+	//			_string[0] = 0;
+	//		}
+	//		else {
+	//			memcpy(_string, _ptr, MIN(length, 255));
+	//			_string[MIN(length, 255)] = 0;
+	//			if (!_string[0])
+	//				_string[0] = ' ';
+	//			_ptr += length;
+	//		}
+	//		return _string;
+	//	}
+
+	//	char* gets_any(const char* const of) {
+	//		_string[0] = 0;
+
+	//		int length = 0;
+	//		while (!eof() && length < 255) {
+	//			unsigned char ch = *_ptr;
+	//			if (strchr(of, ch)) { // valid character
+	//				_string[length++] = ch;
+	//				_ptr++;
+	//			}
+	//			else {
+	//				_string[length] = 0;
+	//				return _string;
+	//			}
+	//		}
+	//		_string[length] = 0;
+	//		return _string;
+	//	}
+
+	//	static bool isNumeric(char x) {
+	//		return (x >= '0' && x <= '9');
+	//	}
+
+	//	char* gets_numeric() {
+	//		_string[0] = 0;
+
+	//		int length = 0;
+	//		while (!eof() && length < 255) {
+	//			unsigned char ch = *_ptr;
+	//			if (isNumeric(ch)) { // valid character
+	//				_string[length++] = ch;
+	//				_ptr++;
+	//			}
+	//			else {
+	//				_string[length] = 0;
+	//				return _string;
+	//			}
+	//		}
+	//		_string[length] = 0;
+	//		return _string;
+	//	}
+
+	//	static bool isHexadecimal(char x) {
+	//		return (x >= 'A' && x <= 'F') || (x >= '0' && x <= '9');
+	//	}
+
+	//	char* gets_hex() {
+	//		_string[0] = 0;
+
+	//		int length = 0;
+	//		while (!eof() && length < 255) {
+	//			unsigned char ch = *_ptr;
+	//			if (isHexadecimal(ch)) { // valid character
+	//				_string[length++] = ch;
+	//				_ptr++;
+	//			}
+	//			else {
+	//				_string[length] = 0;
+	//				return _string;
+	//			}
+	//		}
+	//		_string[length] = 0;
+	//		return _string;
+	//	}
+
+	//	void gets(char* string, int length) {
+	//		if ((_ptr + length) >= _end) {
+	//			_ptr = _end;
+	//			return;
+	//		}
+	//		memcpy(string, _ptr, length);
+	//		string[length] = 0;
+	//		_ptr += length;
+	//	}
+
+	//	/*	void gets(std::string& string, int length){
+	//			if((_ptr + length) >= _end){
+	//				_ptr = _end;
+	//				return;
+	//			}
+
+	//	//		memcpy(string, _ptr, length);
+	//	//		string[length] = 0;
+	//			string.copy((char*)_ptr, length);
+	//			string.append(0);
+
+	//			_ptr += length;
+	//		}*/
+
+	//	void gets(char* string) {
+	//		if (eof()) return;
+	//		gets(string, getc());
+	//	}
+
+	//	/*void gets0(char* string, int length){
+	//		if((_ptr + length) >= _end){
+	//			_ptr = _end;
+	//			return;
+	//		}
+	//		memcpy(string, _ptr, length);
+	//		string[length] = 0;
+	//		if(string[0] == 0)
+	//			string[0] = ' ';
+	//		_ptr += length;
+	//	}*/
+
+	//	void gets(char* string, char terminator, unsigned int length) {
+	//		const BYTE_PTR _end = std::min(_ptr + length, this->_end);
+	//		BYTE_PTR _offset;
+	//		for (_offset = _ptr; _offset < _end; _offset++) {
+	//			if (*_offset == terminator)
+	//				break;
+	//		}
+	//		//		if(_offset != _end){
+	//		const unsigned int _len = (unsigned int)(_offset - _ptr);
+	//		memcpy(string, _ptr, _len);
+	//		string[std::min(length - 1, _len)] = 0;
+	//		//		}
+	//		_ptr = _offset;
+	//	}
+
+	//	static bool isAlphaNumeric(char x) {
+	//		return (x >= 'a' && x <= 'z') || (x >= 'A' && x <= 'Z') || (x >= '0' && x <= '9');
+	//	}
+
+	//	void gettag(char* string) {
+	//		while (isAlphaNumeric(*_ptr)) {
+	//			*string++ = *_ptr++;
+	//		}
+	//		*string = 0;
+	//	}
+
+	//	void getcs(char* string) {
+	//		if (_ptr > _end) {
+	//			string[0] = 0;
+	//			return;
+	//		}
+	//		const int length = *_ptr;
+	//		if ((_ptr + length) > _end) {
+	//			string[0] = 0;
+	//			return;
+	//		}
+	//		_ptr++;
+	//		memcpy(string, _ptr, length);
+	//		_ptr += length;
+	//	}
+
+	//	int read(void* to, const int size) {
+	//		if ((_ptr + size) > _end) {
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		memcpy(to, _ptr, size);
+	//		_ptr += size;
+	//		return size;
+	//	}
+
+	//	void skip(const int size) {
+	//		if ((_ptr + size) > _end) {
+	//			_ptr = _end;
+	//			return;
+	//		}
+	//		_ptr += size;
+	//	}
+
+	//	void skip_any(char token) {
+	//		while (!eof()) {
+	//			if (*_ptr != token)
+	//				return;
+	//			_ptr++;
+	//		}
+	//	}
+
+	//	void skip_any(const char* tokens) {
+	//		while (!eof()) {
+	//			const char* pTokens = tokens;
+	//			while (*pTokens != '\0') {
+	//				if (*_ptr == *pTokens)
+	//					break;
+	//				pTokens++;
+	//			}
+	//			if (*pTokens)
+	//				_ptr++;
+	//			else
+	//				return;
+	//		}
+	//	}
+
+	//	bool skip_to(char token) {
+	//		while (!eof()) {
+	//			if (*_ptr == token)
+	//				return true;
+	//			_ptr++;
+	//		}
+	//		return false;
+	//	}
+
+	//	bool skip_to(const char* token) {
+	//		size_t length = strlen(token);
+	//		while (!eof()) {
+	//			if (!memcmp(token, _ptr, length)) {
+	//				_ptr += length;
+	//				return true;
+	//			}
+	//			_ptr++;
+	//		}
+	//		return false;
+	//	}
+
+	//	void skip_to_any(const char* tokens) {
+	//		while (!eof()) {
+	//			const char* pTokens = tokens;
+	//			while (*pTokens != '\0') {
+	//				if (*_ptr == *pTokens++)
+	//					return;
+	//			}
+	//			_ptr++;
+	//		}
+	//	}
+
+	//	bool match_i(const char* stuff) {													// matches given text with file
+	//		size_t length = strlen(stuff);																	// (reset expectation)
+	//		if (!_strnicmp(stuff, (const char*)_ptr, length)) {
+	//			_ptr += length;
+	//			return true;
+	//		}
+	//		return false;
+	//	}
+
+	//	bool match(const char* stuff) {													// matches given text with file
+	//		size_t length = strlen(stuff);																	// (reset expectation)
+	//		if (!memcmp(stuff, _ptr, length)) {
+	//			_ptr += length;
+	//			return true;
+	//		}
+	//		return false;
+	//	}																																				//
+
+	//	bool match(char stuff) {													// matches given text with file
+	//		if (*_ptr == stuff) {
+	//			_ptr++;
+	//			return true;
+	//		}
+	//		return false;
+	//	}
+
+	//	// in-place character replacement
+	//	int replace(BYTE find, BYTE replace) {
+	//		int nbReplaced = 0;
+	//		BYTE_PTR ptr = _buf;
+	//		while (ptr < _end) {
+	//			if (*ptr == find)
+	//				*ptr = replace;
+	//			nbReplaced++;
+	//			ptr++;
+	//		}
+	//		return nbReplaced;
+	//	}
+
+	//	// in-place phrase replacement
+	//	int replace_fast(const char* find, const char* replace) {
+	//		// build new string
+	//		const char* str = (const char*)_buf;
+	//		const char* end = (const char*)_end;
+	//		const int length = (int)strlen(replace);
+	//		int nbReplaced = 0;
+
+	//		while (str < end) {
+	//			if (!memcmp(str, find, length)) { // match
+	//				memcpy((void*)str, replace, length);
+	//				str += length;
+	//				nbReplaced++;
+	//			}
+	//			else {
+	//				str++;
+	//			}
+	//		}
+	//		return nbReplaced;
+	//	}
+
+	//	int replace(const char* find, const char* replace) {
+	//		const int cbFind = (int)strlen(find);
+	//		const int cbReplace = (int)strlen(replace);
+	//		if (cbFind == cbReplace) // no memory re-allocation required
+	//			return replace_fast(find, replace);
+
+	//		// build new string
+	//		std::string new_str;
+	//		const char* str = (const char*)_buf;
+	//		const char* last = str;
+	//		const char* end = (const char*)_end;
+	//		int nbReplaced = 0;
+
+	//		while (str < end) {
+	//			if (!memcmp(str, find, cbFind)) { // match
+	//				new_str.append(last, str - last); // catch-up
+	//				new_str += replace;
+	//				str += cbFind;
+	//				last = str;
+	//				nbReplaced++;
+	//			}
+	//			else {
+	//				str++;
+	//			}
+	//		}
+	//		if (last < end)
+	//			new_str.append(last, end - last);
+
+	//		// replace buffer with new string
+	//		create((int)new_str.length());
+	//		memcpy(_buf, new_str.data(), new_str.length());
+	//		return nbReplaced;
+	//	}
+
+	//	bool match_any(const char* stuffs) {
+	//		while (*stuffs != '\0') {
+	//			if (*_ptr == *stuffs++) {
+	//				_ptr++;
+	//				return true;
+	//			}
+	//		}
+	//		return false;
+	//	}
+
+	//	unsigned int length() const { return _len; }
+	//	const BYTE_PTR buffer() const { return _buf; }
+	//	BYTE_PTR buffer() { return _buf; }
+	//	BYTE_PTR pointer() { return _ptr; }
+	//	BYTE_PTR* ppointer() { return &_ptr; }
+
+	//	unsigned int offset() const { return (unsigned int)(_ptr - _buf); }
+	//	bool seek(unsigned int offset) {
+	//		_ptr = _buf + offset;
+	//		if (_ptr > _end) {
+	//			_ptr = _end;
+	//			return false;
+	//		}
+	//		else return true;
+	//	}
+	//protected:
+	//	BYTE_PTR _buf;
+	//	unsigned int _len;
+
+	//	BYTE_PTR _end;
+	//	BYTE_PTR _ptr;
+
+	//	char _string[256];
 	};
 
 	/// String of characters representing text.
@@ -1050,10 +1742,10 @@ namespace klang {
 		template<typename TYPE> signal operator-(const Control& x) const { return value - (signal)x; }
 		template<typename TYPE> signal operator/(const Control& x) const { return value / (signal)x; }
 
-		template<typename TYPE> float operator+(TYPE x) const { return value + (signal)x; }
-		template<typename TYPE> float operator*(TYPE x) const { return value * (signal)x; }
-		template<typename TYPE> float operator-(TYPE x) const { return value - (signal)x; }
-		template<typename TYPE> float operator/(TYPE x) const { return value / (signal)x; }
+		template<typename TYPE> float operator+(TYPE& x) const { return value + (signal)x; }
+		template<typename TYPE> float operator*(TYPE& x) const { return value * (signal)x; }
+		template<typename TYPE> float operator-(TYPE& x) const { return value - (signal)x; }
+		template<typename TYPE> float operator/(TYPE& x) const { return value / (signal)x; }
 
 		template<typename TYPE> Control& operator<<(TYPE& in) { value = in; return *this; }		// assign to control with processing
 		template<typename TYPE> Control& operator<<(const TYPE& in) { value = in; return *this; }	// assign to control without/after processing
@@ -1323,7 +2015,7 @@ namespace klang {
 			set(initial);
 		}
 
-		buffer(int size, float initial = 0)
+		buffer(int size = 1, float initial = 0)
 			: mask(capacity(size) - 1), owned(true), samples(new float[capacity(size)]), size(size) {
 			rewind();
 			set(initial);
@@ -1332,6 +2024,12 @@ namespace klang {
 		virtual ~buffer() {
 			if (owned)
 				delete[] samples;
+		}
+
+		void attach(const buffer& buffer, int size = 0) {
+			samples = buffer.samples;
+			rewind();
+			end = (signal*)&samples[size];
 		}
 
 		void rewind(int offset = 0) {
@@ -1418,8 +2116,7 @@ namespace klang {
 		}
 
 		buffer& operator=(const buffer& in) {
-			//assert(size == in.size);
-			memcpy(samples, in.samples, size * sizeof(float));
+			memcpy(samples, in.samples, min(size, in.size) * sizeof(float));
 			return *this;
 		}
 
@@ -1428,8 +2125,54 @@ namespace klang {
 			return *this;
 		}
 
+		float* data() { return samples; }
 		const float* data() const { return samples; }
 	};
+
+	namespace variable {
+		class buffer {
+			std::unique_ptr<klang::buffer> ptr;
+		public:
+			int size = 0;
+
+			buffer(int size = 1, float initial = 0.f) : size(size), ptr(new klang::buffer(size, initial)) {}
+			buffer(const klang::buffer& buffer) : size(buffer.size), ptr(new klang::buffer(buffer.size)) { *ptr = buffer; };
+			//buffer(klang::buffer* buffer) : size(buffer->size), ptr(new klang::buffer(buffer->data(), buffer->size)) { };
+			virtual ~buffer() { ptr.reset(); };
+
+			operator klang::buffer& () { return *ptr; }
+			operator const klang::buffer& () const { return *ptr; }
+			void resize(int size) {
+				if (size != ptr->size)
+					ptr = std::unique_ptr<klang::buffer>(new klang::buffer(buffer::size = size));
+			}
+
+			void rewind(int offset = 0) { ptr->rewind(offset); }
+			void clear() { ptr->clear(); }
+			void clear(int size) { ptr->clear(size); }	
+			int offset() const { return ptr->offset(); }
+			void set(float value = 0) { ptr->set(value); }
+			signal& operator[](int offset) { return ptr->operator[](offset); }
+			signal operator[](float offset) { return ptr->operator[](offset); }
+			signal operator[](float offset) const { return ptr->operator[](offset); }
+			const signal& operator[](int index) const { return ptr->operator[](index); }
+			operator signal& () { return ptr->operator signal & (); }
+			operator const signal& () const { return ptr->operator const signal & (); }
+			explicit operator double() const { return ptr->operator double(); }
+			bool finished() const { return ptr->finished(); }
+			signal& operator++(int) { return ptr->operator++(1); }
+			//signal& operator=(const signal& in) { return ptr->operator=(in); }
+			//signal& operator+=(const signal& in) { return ptr->operator+=(in); }
+			//signal& operator*=(const signal& in) { return ptr->operator*=(in); }
+			
+			variable::buffer& operator=(const klang::buffer& in) {
+				resize(in.size); *ptr = in; return *this;
+			}
+
+			float* data() { return ptr->data(); }
+			const float* data() const { return ptr->data(); }
+		};
+	}
 
 	struct Graph;
 	struct GraphPtr;
@@ -1447,8 +2190,8 @@ namespace klang {
 			virtual const SIGNAL& input() const { return in; }
 
 			// feedback input (include pre-processing, if any)
-			virtual void operator<<(const SIGNAL& source) { in = source; input(); }
-			virtual void input(const SIGNAL& source) { in = source; input(); }
+			virtual void operator<<(const SIGNAL& source) { in = source; this->input(); }
+			virtual void input(const SIGNAL& source) { in = source; this->input(); }
 
 		protected:
 			// preprocess input (default: none)
@@ -1465,17 +2208,17 @@ namespace klang {
 
 			// pass output to destination (with processing)
 			template<typename TYPE>
-			TYPE& operator>>(TYPE& destination) { process(); return destination = out; }
+			TYPE& operator>>(TYPE& destination) { this->process(); return destination = out; }
 
 			// returns output (with processing)
-			virtual operator const SIGNAL& () { process(); return out; } // return processed output
+			virtual operator const SIGNAL& () { this->process(); return out; } // return processed output
 			virtual operator const SIGNAL& () const { return out; } // return last output
 
 			// arithmetic operations produce copies
-			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator+(TYPE& other) { this->process(); return out + SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator*(TYPE& other) { this->process(); return out * SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator-(TYPE& other) { this->process(); return out - SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator/(TYPE& other) { this->process(); return out / SIGNAL(other); }
 
 			void reset() { out = 0; }
 
@@ -1518,7 +2261,7 @@ namespace klang {
 
 			using Output<SIGNAL>::operator>>;
 			using Output<SIGNAL>::process;
-			operator const SIGNAL& () override { process(); return out; } // return processed output		
+			operator const SIGNAL& () override { this->process(); return out; } // return processed output		
 			operator const SIGNAL& () const override { return out; } // return last output		
 
 		protected:
@@ -1552,7 +2295,7 @@ namespace klang {
 			virtual ~Modifier() {}
 
 			// signal processing (input-output)
-			operator const SIGNAL& () override { process(); return out; } // return processed output
+			operator const SIGNAL& () override { this->process(); return out; } // return processed output
 			operator const SIGNAL& () const override { return out; } // return last output
 
 			using Input<SIGNAL>::input;
@@ -1596,7 +2339,7 @@ namespace klang {
 			operator SIGNAL() {
 				if (function)
 					return out = evaluate();
-				process();
+				this->process();
 				return out;
 			};
 			operator param() {
@@ -2634,7 +3377,7 @@ namespace klang {
 		}
 	};
 
-	/// Audio delay object
+	/// Audio delay object (fixed size)
 	template<int SIZE>
 	struct Delay : public Modifier {
 		using Modifier::in;
@@ -2665,20 +3408,6 @@ namespace klang {
 				read += SIZE;
 			return buffer[read];
 		}
-
-		//signal tap(float delay) const {
-		//	float read = (float)(position - 1) - delay;
-		//	if (read < 0.f)
-		//		read += SIZE;
-
-		//	const float f = floor(read);
-		//	const float fraction = read - f;
-
-		//	const int i = (int)read;
-		//	const int j = (i + 1) % SIZE;
-
-		//	return buffer[i] + fraction * (buffer[j] - buffer[i]);
-		//}
 
 		signal tap(float delay) const {
 			// Calculate the read position
@@ -2711,10 +3440,117 @@ namespace klang {
 			last.position = (last.position + 1) % SIZE;
 		}
 
-		//Delay<SIZE>& operator++(int) {
-		//	last.position++;
-		//	return *this;
-		//}
+		struct Tap {
+			int position;
+			float fraction;
+		} last;
+
+		virtual void set(param samples) override {
+			time = samples < SIZE ? (float)samples : SIZE;
+
+			float read = static_cast<float>(position - 1) - time;
+			if (read < 0.f)
+				read += SIZE;
+
+			last.position = static_cast<int>(read);  // Integer part
+			last.fraction = read - last.position;	 // Fractional part
+		}
+
+		template<typename TIME>
+		signal operator()(TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>)
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
+		}
+
+		template<typename TIME>
+		signal operator()(const TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>)
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
+		}
+
+		unsigned int max() const { return SIZE; }
+	};
+
+	/// Audio delay object (resizable)
+	template<>
+	struct Delay<0> : public Modifier {
+		using Modifier::in;
+		using Modifier::out;
+
+		buffer* buffer;
+		float time = 1;
+		int position = 0;
+		int SIZE = 0;
+
+		Delay() : buffer(new klang::buffer(1, 0)) { clear(); }
+
+		void clear() {
+			buffer->clear();
+		}
+
+		void resize(int samples) {
+			if (samples != SIZE) {
+				SIZE = samples;
+				klang::buffer* new_buffer = new klang::buffer(SIZE + 1, 0);
+				std::swap(buffer, new_buffer);
+				delete new_buffer;
+			}
+		}
+
+		void input() override {
+			(*buffer)++ = in;
+			position++;
+			if (position == SIZE) {
+				buffer->rewind();
+				position = 0;
+			}
+		}
+
+		signal tap(int delay) const {
+			int read = (position - 1) - delay;
+			if (read < 0)
+				read += SIZE;
+			return (*buffer)[read];
+		}
+
+		signal tap(float delay) const {
+			// Calculate the read position
+			float read = static_cast<float>(position - 1) - delay;
+			if (read < 0.f)
+				read += SIZE;
+
+			// Separate integer and fractional parts
+			const int i = static_cast<int>(read);  // Integer part
+			const float fraction = read - i;       // Fractional part
+
+			// Use modulo to get the next index without branching
+			const int j = (i + 1) % SIZE;          // Next index in circular buffer
+
+			// Linear interpolation: buffer[i] + fraction * (buffer[j] - buffer[i])
+			return (*buffer)[i] + fraction * ((*buffer)[j] - (*buffer)[i]);
+		}
+
+		signal tap() const {
+			// Use modulo to get the next index without branching
+			const int i = last.position;
+			const int j = (i + 1) % SIZE;          // Next index in circular buffer
+
+			// Linear interpolation: buffer[i] + fraction * (buffer[j] - buffer[i])
+			return (*buffer)[i] + last.fraction * ((*buffer)[j] - (*buffer)[i]);
+		}
+
+		virtual void process() override {
+			out = tap();
+			last.position = (last.position + 1) % SIZE;
+		}
 
 		struct Tap {
 			int position;
@@ -2804,6 +3640,50 @@ namespace klang {
 		void process() override {
 			position += { increment, size };
 			out = buffer[position + offset /*klang::increment(offset, size)*/];
+		}
+	};
+
+	/// Sample-based signal generator
+	class Sample : public Oscillator {
+		using Oscillator::set;
+	protected:
+		buffer buffer;
+		int size;
+	public:
+		Sample() : buffer(nullptr, 0), size(0) { }
+
+		signal& operator[](int index) {
+			return buffer[index];
+		}
+
+		Sample& operator=(const klang::buffer& buffer) {
+			size = buffer.size;
+			Sample::buffer.attach(buffer, size);
+			return *this;
+		}
+
+		virtual void set(param frequency) override {
+			Oscillator::frequency = frequency;
+			increment = 1;// frequency* (44100 / fs);
+		}
+
+		virtual void set(param frequency, param phase) override {
+			position = phase * float(44100);
+			set(frequency);
+		}
+
+		virtual void set(relative phase) override {
+			offset = phase * float(44100);
+		}
+
+		virtual void set(param frequency, relative phase) override {
+			set(frequency);
+			set(phase);
+		}
+
+		void process() override {
+			position += { increment, size };
+			out = buffer[position + offset];
 		}
 	};
 
@@ -3099,7 +3979,7 @@ namespace klang {
 
 		// Returns the output of the envelope and advances the envelope (for backwards compatibility)
 		signal& operator++(int) {
-			process();
+			this->process();
 			return out;
 		}
 
@@ -3294,7 +4174,7 @@ namespace klang {
 		virtual void prepare() {};
 		virtual void process() { out = in; }
 		virtual void process(buffer buffer) {
-			prepare();
+			this->prepare();
 			while (!buffer.finished()) {
 				input(buffer);
 				this->process();
@@ -3324,7 +4204,8 @@ namespace klang {
 		virtual event on(Pitch p, Velocity v) {}
 		virtual event off(Velocity v = 0) { stage = Off; }
 
-		SYNTH* getSynth() { return synth; }
+		//SYNTH* getSynth() { return synth; }
+		auto getSynth() { return static_cast<std::remove_pointer_t<decltype(synth)>*>(synth); }
 	public:
 		Pitch pitch;
 		Velocity velocity;
@@ -3380,7 +4261,7 @@ namespace klang {
 		virtual void prepare() {}
 		virtual void process() override = 0;
 		virtual bool process(buffer buffer) {
-			prepare();
+			this->prepare();
 			while (!buffer.finished()) {
 				this->process();
 				buffer++ = out;
@@ -3389,7 +4270,7 @@ namespace klang {
 			return !finished();
 		}
 		virtual bool process(buffer* buffer) {
-			return process(buffer[0]);
+			return this->process(buffer[0]);
 		}
 	};
 
@@ -3793,10 +4674,10 @@ namespace klang {
 			virtual void prepare() {};
 			virtual void process() { out = in; };
 			virtual void process(Stereo::buffer buffer) {
-				prepare();
+				this->prepare();
 				while (!buffer.finished()) {
 					input(buffer);
-					process();
+					this->process();
 					buffer++ = out;
 					debug.buffer++;
 				}
@@ -3812,16 +4693,16 @@ namespace klang {
 			virtual void prepare() {}
 			virtual void process() override = 0;
 			virtual bool process(Stereo::buffer buffer) {
-				prepare();
+				this->prepare();
 				while (!buffer.finished()) {
-					process();
+					this->process();
 					buffer++ += out;
 				}
 				return !finished();
 			}
 			virtual bool process(mono::buffer* buffers) {
 				buffer buffer = { buffers[0], buffers[1] };
-				return process(buffer);
+				return this->process(buffer);
 			}
 		};
 
@@ -3832,7 +4713,7 @@ namespace klang {
 				virtual void prepare() override {}
 				virtual void process() override = 0;
 				virtual bool process(Stereo::buffer buffer) override {
-					prepare();
+					this->prepare();
 					while (!buffer.finished()) {
 						this->process();
 						buffer.left += out;
@@ -4605,8 +5486,17 @@ namespace klang {
 				/// Set the filter cutoff (default Q)
 				void set(param f) { set(f, root2.inv); }
 
+				/// Set the filter cutoff and bandwidth
+				void set(param f, relative bw) {
+					if (bw > 0)
+						set(f, param(f / bw));
+				}
+
 				/// Set the filter cutoff and Q
 				void set(param f, param Q) {
+					if (Q < 0) // treat negative Q as bandwidth
+						Q = f / -Q;
+
 					if (Filter::f != f || Filter::Q != Q) {
 						Filter::f = f;
 						Filter::Q = Q;
@@ -4825,6 +5715,191 @@ namespace klang {
 				sum* window.inv >> sqrt >> ar >> out;
 			}
 		};
+	};
+
+	struct File {
+#if defined(_MSC_VER)
+#define packed __pragma(pack(push,1)) struct __pragma(pack(pop))
+#else
+#define packed struct __attribute__((packed))
+#endif
+		struct Format {
+			unsigned int channels = 0;
+			unsigned int samplerate = 0;
+			unsigned int bitrate = 0;
+		};
+
+		packed Chunk{
+			struct ID {
+				char id[4] = { 0 };
+				ID() = default;
+				ID(const char* id) : id{ id[0], id[1], id[2], id[3] } {}
+				bool operator==(const ID& id) const {
+					return memcmp(ID::id, id.id, 4) == 0;
+				}
+				bool operator==(const char* const id) const {
+					return memcmp(ID::id, id, 4) == 0;
+				}
+			} id;
+			unsigned int size = 0;
+
+			Chunk() = default;
+			Chunk(ID id, unsigned int size = 0) : id(id), size(size) {}
+		};
+
+		packed Header : Chunk{
+			ID format;
+
+			Header() = default;
+			Header(ID id, ID format, unsigned int size = 0) : Chunk(id, size), format(format) {}
+
+			bool isWAV()  const { return id == "RIFF" && format == "WAVE"; }
+			bool isAIFF() const { return id == "FORM" && format == "AIFF"; }
+		};
+
+		packed WAV{
+			Memory memory;
+
+			packed Header : File::Header {
+				Header() : File::Header("RIFF", "WAVE") {}
+			} *header = nullptr;
+
+			packed Format : Chunk {
+				unsigned short AudioFormat;
+				unsigned short NumChannels;
+				unsigned int   SampleRate;
+				unsigned int   ByteRate;
+				unsigned short BlockAlign;
+				unsigned short BitsPerSample;
+
+				Format() : Chunk("fmt ", sizeof(Format)) {}
+
+				operator File::Format() const { return { NumChannels, SampleRate, BitsPerSample }; }
+			} *format = nullptr;
+
+			packed Data : Chunk {
+				unsigned char data[1] = { 0 };
+
+				Data() : Chunk("data") {}
+			} *data = nullptr;
+
+			// use internal memory
+			bool load(const char* path) {
+				memory.load(path);
+				return load();
+			}
+
+			// use external memory
+			bool load(Memory& memory) {
+				WAV::memory = &memory;
+				return load();
+			}
+
+			bool load() {
+				if (!memory.ptr)
+					return false;
+				memory.rewind();
+
+				// header
+				header = (Header*)memory.ptr;
+				if (!header->isWAV())
+					return false;
+				memory.skip(sizeof(Header));
+
+				// other chunks
+				while (!memory.finished()) {
+					const Chunk chunk = memory;
+					memory.rewind(sizeof(Chunk));
+					if (chunk.id == "fmt ")
+						format = (Format*)memory.ptr;
+					else if (chunk.id == "data") {
+						if (memory.ptr + chunk.size > memory.end)
+							return false; // corrupt
+						data = (Data*)memory.ptr;
+					}
+					memory.skip(sizeof(Chunk) + chunk.size);
+				}
+				return true;
+			}
+
+			template<typename TYPE, int STEP = 1>
+			inline static void decode(float* buffer, const TYPE* data, int length) {
+				if constexpr (std::is_floating_point<TYPE>::value) {
+					while (length--) {
+						*buffer++ = *data; 
+						data += STEP;
+					}
+				} else {
+					constexpr unsigned int twoComp = 1U << (sizeof(TYPE) * 8 - 1);
+					if constexpr (std::numeric_limits<TYPE>::is_signed) {
+						constexpr float scale = 1.f / twoComp;
+						while (length--) {
+							*buffer++ = static_cast<float>(*data) * scale; 
+							data += STEP;
+						}
+					} else {
+						constexpr float scale = 1.f / ((twoComp << 1) - 1);
+						while (length--) {
+							*buffer++ = (static_cast<float>(*data) - twoComp) * scale; 
+							data += STEP;
+						}
+					}
+				}
+			}
+
+			bool operator>>(variable::buffer& buffer) {
+				if (!header || !format || !data) 
+					return false;
+
+				buffer.resize(data->size / format->BlockAlign);
+				if (format->AudioFormat == 1) {	// PCM (integer)
+					if (format->BitsPerSample == 8)
+						decode<unsigned char>(buffer.data(), (unsigned char*)data->data, buffer.size); // 8-bit (unsigned)
+					else if(format->BitsPerSample == 16)
+						decode<signed short>(buffer.data(), (signed short*)data->data, buffer.size); // 16-bit (signed)
+					else if(format->BitsPerSample == 32)
+						decode<signed int>(buffer.data(), (signed int*)data->data, buffer.size); // 32-bit (signed)
+				} else if (format->AudioFormat == 3) { 
+					if(format->BitsPerSample == 32)
+						decode<float>(buffer.data(), (float*)data->data, buffer.size); // 32-bit (float)
+				}
+				return true;
+			}
+		};
+
+		//struct AIFF {		
+		//	struct Binary Extended {
+		//		unsigned short exponent;	  // 15-bit exponent + sign bit
+		//		unsigned long long mantissa;  // 64-bit mantissa
+		//
+		//		operator double() const {
+		//			uint16_t exp = (exponent >> 8) | (exponent << 8); // Swap bytes (big-endian to host)
+		//			const bool sign = exp & 0x8000;		// Extract sign bit
+		//			exp &= 0x7FFF;						// Remove sign bit
+		//
+		//			uint64_t mant = __builtin_bswap64(mantissa); // Convert mantissa (big-endian to host)
+		//			if (exp == 0 && mant == 0) return 0.0; // Handle zero case
+		//
+		//			double fraction = static_cast<double>(mant) / (1ULL << 63); // normalize mantissa (hidden bit)
+		//			return (sign ? -fraction : fraction) * std::pow(2.0, exp - 16383);
+		//		}
+		//	};
+		//
+		//	struct Binary Header : File::Header {
+		//		Header() : File::Header("FORM", "AIFF") {}
+		//	};
+		//
+		//	struct Binary Format : Chunk {
+		//		unsigned short numChannels;
+		//		unsigned int   numSamplesFrames;
+		//		unsigned short sampleSize;
+		//		Extended	   sampleRate;
+		//
+		//		Format() : Chunk("COMM ", sizeof(Format)) { }
+		//
+		//		operator File::Format() const { return { numChannels, sampleRate, sampleSize }; }
+		//	};
+		//};
 	};
 
 	namespace basic {
