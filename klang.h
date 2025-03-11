@@ -82,7 +82,7 @@ namespace klang {
 		}
 		bool below(unsigned char M, unsigned char m, unsigned char b) const { return !atLeast(M, m, b); }
 	}
-	static constexpr version = { 0, 7, 7, KLANG_DEBUG };
+	static constexpr version = { 0, 7, 8, KLANG_DEBUG };
 
 	/// Klang mode identifiers (e.g. averages, level following)
 	enum Mode { Peak, RMS, Mean };
@@ -3426,6 +3426,38 @@ namespace klang {
 			return buffer[i] + fraction * (buffer[j] - buffer[i]);
 		}
 
+		signal lagrange(float delay) const {
+			// Calculate the read position
+			float read = static_cast<float>(position - 1) - delay;
+			if (read < 0.f)
+				read += SIZE;
+
+			// Separate integer and fractional parts
+			int i = static_cast<int>(read);  // Integer part
+			float x = read - i;              // Fractional part (0 ? x < 1)
+
+			// Get four surrounding indices using modulo for circular buffer
+			int i0 = (i - 1 + SIZE) % SIZE;
+			int i1 = i;                      // Main sample
+			int i2 = (i + 1) % SIZE;
+			int i3 = (i + 2) % SIZE;
+
+			// Read corresponding samples
+			float y0 = buffer[i0];
+			float y1 = buffer[i1];
+			float y2 = buffer[i2];
+			float y3 = buffer[i3];
+
+			// Compute Lagrange interpolation (third-order)
+			float c0 = (-x * (x - 1) * (x - 2)) / 6.0f;
+			float c1 = ((x + 1) * (x - 1) * (x - 2)) / 2.0f;
+			float c2 = (-x * (x + 1) * (x - 2)) / 2.0f;
+			float c3 = (x * (x + 1) * (x - 1)) / 6.0f;
+
+			return c0 * y0 + c1 * y1 + c2 * y2 + c3 * y3;
+		}
+
+
 		signal tap() const {
 			// Use modulo to get the next index without branching
 			const int i = last.position;
@@ -5351,21 +5383,83 @@ namespace klang {
 	/// Common audio filters.
 	namespace Filters {
 
-		//		namespace Basic {
+		/// Simple DC filter / blocker
+		struct DCF : public Modifier {
+			float r = 0.995f; // Decay factor (adjustable)
+			float z = 0;	  // Filter state (last input)
 
-					/// Basic one-pole IIR filter.
+			void set(float r) { this->r = r; }
+
+			void process() {
+				out = in - z + r * out;
+				z = in;
+			}
+		};
+
+		/// IIR filter for specified order
+		template<int ORDER>
 		struct IIR : public Modifier {
 			virtual ~IIR() {}
 
-			float a, b;
+			float a[ORDER] = { }; // Feedback coefficients (a1, a2, ..., aN)
+			float y[ORDER] = { }; // Previous outputs (y[n-1], y[n-2], ..., y[n-N])
 
-			void set(param coeff) {
-				a = coeff;
-				b = 1 - a;
+			template <typename... Coeffs>
+			void set(Coeffs... coeffs) {
+				static_assert(sizeof...(coeffs) == ORDER, "Incorrect number of coefficients.");
+				_set<0>(coeffs...);
 			}
 
 			void process() {
-				out = (a * in) + (b * out);
+				out = in;
+				for (size_t i = 0; i < ORDER; ++i)
+					out -= a[i] * y[i];
+
+				for (size_t i = ORDER - 1; i > 0; --i)
+					y[i] = y[i - 1];
+				y[0] = out;
+			}
+
+		protected:
+			// Helper function to unpack variadic arguments into a[]
+			template <size_t index, typename First, typename... Rest>
+			void _set(First first, Rest... rest) {
+				a[index] = first;
+				if constexpr (index + 1 < ORDER)
+					_set<index + 1>(rest...);
+			}
+		};
+		
+		// optimised first-order IIR
+		template <>
+		struct IIR<1> : public Modifier {
+			virtual ~IIR() {}
+
+			float a = 1, b = 0; // Feedback coefficients (a1, a2)
+
+			void set(param coeff) {
+				a = coeff;
+				b = 1.f - a;
+			}
+
+			void process() {
+				out = in * a + out * b;
+			}
+
+			/// Compute the phase offset in seconds at a given frequency
+			float phase(float f) const {
+				float omega = 2.0f * pi.f * f / fs.f;
+				float cos_w = cosf(omega);
+				float sin_w = sinf(omega);
+
+				return atan2(b * sin_w, 1.f - b * cos_w) / (2.0f * pi.f * f); // Convert to seconds
+			}
+
+			/// Compute the group delay in samples at a given frequency
+			float delay(float f) const {
+				const float omega = 2.0f * pi.f * f / fs.f;
+				const float cos_w = cosf(omega);
+				return (1.f - a * a) / (1.f - 2.f * a * cos_w + a * a);
 			}
 		};
 
@@ -5396,7 +5490,6 @@ namespace klang {
 				void set(param f) {
 					if (Filter::f != f) {
 						Filter::f = f;
-						//tan0 = tanf(0.5f * f * fs.w);
 						init();
 					}
 				}
@@ -5405,6 +5498,7 @@ namespace klang {
 
 				void process() {
 					out = b0 * in + b1 * z + a1 * out + DENORMALISE;
+					z = in;
 				}
 			};
 
@@ -5421,6 +5515,19 @@ namespace klang {
 				void process() {
 					out = b0 * in + a1 * out + DENORMALISE;
 				}
+
+				/// Compute the phase delay in seconds at a given frequency
+				float phase(float f) const {
+					float omega = 2.0f * pi.f * f / fs.f;
+					float cos_w = cosf(omega);
+					float sin_w = sinf(omega);
+
+					float real = b0 - a1 * cos_w;
+					float imag = -a1 * sin_w;
+
+					float phaseRadians = atan2f(imag, real);
+					return phaseRadians / (2.0f * pi.f * f); // Convert to seconds
+				}
 			};
 
 			/// High-pass filter (HPF)
@@ -5432,25 +5539,6 @@ namespace klang {
 					b0 = 0.5f * (1.f + exp0);
 					b1 = -b0;
 					a1 = exp0;
-				}
-			};
-		};
-
-		/// One-pole Butterworth filter.
-		namespace Butterworth {
-			/// Low-pass filter (LPF).
-			struct LPF : OnePole::Filter {
-				virtual ~LPF() {}
-
-				void init() {
-					const float c = 1.f / tanf(pi * f * fs.inv);
-					constant a0 = { 1.f + c };
-					b0 = a0.inv;  // b0 == b1
-					a1 = (1.f - c) * a0.inv; // = (1-c) / a0
-				}
-				void process() {
-					out = b0 * (in + z) - a1 * out;// +DENORMALISE;
-					z = in;
 				}
 			};
 		};
@@ -5484,12 +5572,12 @@ namespace klang {
 				}
 
 				/// Set the filter cutoff (default Q)
-				void set(param f) { set(f, root2.inv); }
+				void set(param f) { this->set(f, root2.inv); }
 
 				/// Set the filter cutoff and bandwidth
 				void set(param f, relative bw) {
 					if (bw > 0)
-						set(f, param(f / bw));
+						this->set(f, param(f / bw));
 				}
 
 				/// Set the filter cutoff and Q
@@ -5507,7 +5595,7 @@ namespace klang {
 
 						if (Q < 0.5) Q = 0.5;
 						a = sin0 / (2.f * Q);
-						init();
+						this->init();
 					}
 				}
 
@@ -5521,6 +5609,45 @@ namespace klang {
 					z[0] = b1 * in - a1 * y + z1;
 					z[1] = b2 * in - a2 * y;
 					out = y;
+				}
+
+				/// Return the phase offset for the specified frequency (in seconds)
+				float phase(float f) const
+				{
+					float omega = 2.0f * pi.f * f / fs.f;
+					float cos_w = std::cos(omega);
+					float sin_w = std::sin(omega);
+
+					float real = b0 + b1 * cos_w + b2 * cos(2 * omega);// -(a1 * cos_w + a2 * cos(2 * omega));
+					float imag =      b1 * sin_w + b2 * sin(2 * omega);// -(a1 * sin_w + a2 * sin(2 * omega));
+					float phaseRadians = std::atan2(-imag, real);
+
+					real = 1 + (a1 * cos_w + a2 * cos(2 * omega));
+					imag = (a1 * sin_w + a2 * sin(2 * omega));
+
+					phaseRadians -= std::atan2(-imag, real);
+					return phaseRadians / (2.0f * pi.f * f); // Convert to seconds
+				}
+
+				/// Return the group delay for the specified frequency (in samples)
+				float delay(float f) const
+				{
+					float omega = 2.0f * pi.f * f / fs.f;
+					float cos_w = std::cos(omega);
+					float sin_w = std::sin(omega);
+
+					// Compute transfer function components
+					float R = b0 + b1 * cos_w + b2 * cos(2 * omega) - (a1 * cos_w + a2 * cos(2 * omega));
+					float I =      b1 * sin_w + b2 * sin(2 * omega) - (a1 * sin_w + a2 * sin(2 * omega));
+
+					// Compute phase response
+					//float phaseRadians = std::atan2(I, R);
+
+					// Compute the derivative of phase (group delay)
+					float dR_dOmega = -b1 * sin_w - 2 * b2 * sin(2 * omega) + a1 * sin_w + 2 * a2 * sin(2 * omega);
+					float dI_dOmega =  b1 * cos_w + 2 * b2 * cos(2 * omega) - a1 * cos_w - 2 * a2 * cos(2 * omega);
+
+					return (R * dI_dOmega - I * dR_dOmega) / (R * R + I * I);
 				}
 			};
 
@@ -5616,16 +5743,120 @@ namespace klang {
 
 			/// All-pass filter (APF)
 			struct APF : Filter {
+				param r = 1.f;
+
+				/// Set the filter cutoff (default r)
+				void set(param f) { this->set(f, 1.f); }
+
+				/// Set the pole frequency and radius (r)
+				void set(param f, param r) {
+					if (Filter::f != f || a != r) {
+						Filter::f = f;
+						a = r;
+
+						const float w = f * fs.w;
+						cos0 = cosf(w);
+						sin0 = sinf(w);
+						
+						init();
+					}
+				}
+
 				void init() {
-					constant a0 = { 1.f + a };
-					b1 = a1 = a0.inv * (-2.f * cos0);
-					b0 = a2 = a0.inv * (1.f - a);
+					float omega = 2.0f * pi * f / fs;
+					float cos0 = cos(omega);
+
+					b0 = a2 = a * a;
+					b1 = a1 = (-2.f * a * cos0);
 					b2 = 1.f;
 				}
 			};
 		}
 		//		}
+	
+		/// One-pole Butterworth filter.
+		namespace Butterworth {
+			/// Low-pass filter (LPF).
+			template<int ORDER>
+			struct LPF : OnePole::Filter {
+				virtual ~LPF() {}
+			};
+
+			template<>
+			struct LPF<1> : OnePole::Filter {
+				virtual ~LPF() {}
+
+				void init() {
+					const float c = 1.f / tanf(pi * f * fs.inv);
+					constant a0 = { 1.f + c };
+					b0 = a0.inv;  // b0 == b1
+					a1 = (1.f - c) * a0.inv; // = (1-c) / a0
+				}
+				void process() {
+					out = b0 * (in + z) - a1 * out;// +DENORMALISE;
+					z = in;
+				}
+			};
+
+			template<>
+			struct LPF<2> : Biquad::Filter {
+				void init() {
+					constant a0 = { 1.f + a };
+					b0 = a0.inv * ((1.f - cos0) / 2.f);
+					b1 = a0.inv * (1.f - cos0);
+					b2 = a0.inv * ((1.f - cos0) / 2.f);
+					a1 = a0.inv * ( - 2.f * cos0);
+					a2 = a0.inv * (1.f - a);
+				}
+			};
+		};
 	}
+
+	/// Common audio modifiers.
+	namespace Modifiers {
+		/// Modal resonator
+		struct Modal : public Modifier {
+			float a1 = 0, a2 = 0;
+			float y1 = 0, y2 = 0;
+
+			float gain = 0.05f;
+
+			// initialise the resonator
+			void set(param f, param decay, param gain) {
+				set(f, decay);
+				this->gain = std::clamp(gain.value * 0.05f, -0.05f, 0.05f);
+			}
+
+			void set(param f, param decay) {
+				gain = 0.05f;
+
+				constexpr float min_d = 1e-6f;  // Prevents underflow
+				constexpr float max_d = 0.9999f;  // Ensures stability
+			
+				const float w = f.value * fs.w;
+				const float d = std::clamp(std::exp(-pi / (decay * fs)), min_d, max_d);
+
+				a1 = 2.f * d * std::clamp(std::cos(w), -0.9999f, 0.9999f);
+				a2 = -d * d;
+
+				y2 = 0;
+				y1 = 0;
+				in = 0;
+				out = 0;
+			}
+
+			void input() {
+				in *= gain;
+			}
+
+			void process() {
+				out = in + a1 * y1 + a2 * y2;
+				y2 = y1;
+				y1 = out;
+				in = 0;
+			}
+		};
+	};
 
 	/// Envelope follower (Peak / RMS)
 	struct Envelope::Follower : Modifier {
@@ -5906,6 +6137,7 @@ namespace klang {
 		using namespace klang;
 
 		using namespace Generators::Basic;
+		using namespace Modifiers;
 		using namespace Filters;
 		using namespace Filters::Biquad;
 	};
@@ -5914,6 +6146,7 @@ namespace klang {
 		using namespace klang;
 
 		using namespace Generators::Fast;
+		using namespace Modifiers;
 		using namespace Filters;
 		using namespace Filters::Biquad;
 	};
