@@ -5,7 +5,7 @@ using namespace klang::optimised;
 struct Filter : Synth {
 
 	struct FilterNote : public Note {
-		Square osc;
+		Saw osc;
 		ADSR adsr;
 		
 		Envelope env;
@@ -26,10 +26,10 @@ struct Filter : Synth {
 		}
 
 		void process() {
-			filter.set(env++, 10);
+			filter.set(env, 10);
 			osc >> filter >> out;
 			
-			out *= adsr++;
+			out *= 0.25 *  adsr;
 			if (adsr.finished())
 				stop();
 		}

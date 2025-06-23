@@ -1,27 +1,26 @@
-
 #include <klang.h>
 using namespace klang::optimised;
 
 struct ModDelay : Effect {
-
 	Delay<192000> delay;
 	Sine lfo;
 
-	// Initialise plugin (called once at startup)
 	ModDelay() {
 		controls = { 
-			Dial("Mod Rate", 1, 10, 6),
-			Dial("Mod Depth", 0.0, 1.0, 0.2),
+			{ "Mod", Dial("Rate"),
+			         Dial("Depth"),
+			         Dial("Feedback", 0, 0.9) }
 		};
 	}
 
-	// Apply processing (called once per sample)
 	void process() {
-		param rate = controls[0];
-		param depth = cube(controls[1].smooth()) / 10.f;
+		param rate = controls[0] * 9 + 1;
+		param depth = controls[1] * 0.01;
+		param gain = controls[2];
 		
-		signal mod = lfo(rate) * depth + depth;
-		mod * 10.f >> debug;
-		(in >> delay)(mod * fs) >> out;
+		signal mod = lfo(rate) * depth + depth;   // generate mod signal
+		signal feedback = gain * delay(mod * fs); // generate feedback signal
+		in + feedback >> out;                     // output the modulated delay
+		delay << out;                             // feedback output to the dela
 	}
 };

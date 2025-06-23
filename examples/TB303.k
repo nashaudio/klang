@@ -5,6 +5,54 @@ using namespace klang::optimised;
 
 struct TB303 : Synth {
 
+		/// Abstract filter class
+		struct OnePole : Modifier {
+			virtual ~OnePole() {}
+
+			float f = 0; 		// cutoff f
+			//float shelf = 1;	// shelving gain
+
+			float /*a0 = 1*/ a1 = 0, b0 = 1, b1 = 0; //coefficients
+
+			float exp0 = 0;
+			//float tan0 = 0;
+			float z = 0;	// filter state
+
+			void reset() {
+				a1 = 0;
+				b0 = 1;
+				b1 = 0;
+				f = 0;
+				z = 0;
+			}
+
+			void set(param f) {
+				if (OnePole::f != f) {
+					OnePole::f = f;
+					//tan0 = tanf(0.5f * f * fs.w);
+					init();
+				}
+			}
+
+			virtual void init() = 0;
+
+			void process() {
+				out = b0 * in + b1 * z + a1 * out + DENORMALISE;
+			}
+		};
+
+	/// High-pass filter (HPF)
+	struct HPF : OnePole {
+		virtual ~HPF() {}
+
+		void init() {
+			const float exp0 = expf(-f * fs.w);
+			b0 = 0.5f * (1.f + exp0);
+			b1 = -b0;
+			a1 = exp0;
+		}
+	};
+
 	struct Filter : Modifier {
 		param cutoff = 0; 		// cutoff frequency
 		param resonance = 0; 	// resonance (normalised)
@@ -20,7 +68,7 @@ struct TB303 : Synth {
 	
 		Filter() : normalise(1.f/tanh(1)) {}
 	
-		OnePole::HPF feedback;	// feedback highpass (to prevent self-oscillation)
+		HPF feedback;	// feedback highpass (to prevent self-oscillation)
 
 		void reset() {
 			cutoff = 0;
@@ -103,11 +151,11 @@ struct TB303 : Synth {
 		void process() {
 			const bool is_square = controls[3] == 1;
 			const signal osc = is_square ? (signal)(square * 0.5f) : (signal)saw;
-			const float fc = (f + sqr(controls[0]) * fs.nyquist) * sqr(env++);
+			const signal fc = (f + (signal)sqr(controls[0]) * fs.nyquist) * (signal)sqr((signal)env);
 			const float hpf_f = 10.f + 490.f * controls[1]; // + 0.f * controls[0];
 			filter.set(fc, (is_square ? 0.9f : 1.f) * controls[1], controls[4]);
 			filter.setHPF(hpf_f);
-			(osc >> filter) * adsr++ >> out;
+			(osc >> filter) * adsr >> out;
 			if (adsr.finished())
 				stop();
 		}

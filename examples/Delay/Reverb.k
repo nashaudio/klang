@@ -19,6 +19,12 @@ struct Reverb : Effect {
 			Dial("Room Size", 0, 0.4, 0.1),
 			Dial("Brightness", 500, 5000, 1500),
 		};
+		
+		presets = { { "Bathroom",    { 0.276, 0.057, 3835.062 } },
+					{ "Lively Room", { 0.309, 0.060, 806.557 } },
+					{ "Air Vent",    { 0.496, 0.089, 2807.678 } },
+					{ "Parking Lot", { 0.216, 0.220, 1367.304 } },
+		};
 	}
 
 	// Prepare for processing (called once per buffer)
@@ -35,7 +41,13 @@ struct Reverb : Effect {
 	}
 	
 	signal late() {
-		return controls[0] * feedback((controls[1]) * fs) >> filter;
+		param times[3] = { 0.2, 0.324, 0.777 };
+		param gains[3] = { 1.0, 0.6, 0.2 };
+		signal mix = 0;
+		mix += gains[0] * controls[0] * feedback((times[0] * controls[1]) * fs);
+		mix += gains[1] * controls[0] * feedback((times[1] * controls[1]) * fs);
+		mix += gains[2] * controls[0] * feedback((times[2] * controls[1]) * fs);
+		return mix >> filter;
 	}
 	
 	// Apply processing (called once per sample)

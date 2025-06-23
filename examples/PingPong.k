@@ -16,7 +16,7 @@ struct PingPong : Stereo::Effect {
 			Dial("Delay", 0.001, 1.0, 0.5),
 			Dial("Scratch", 0.0, 1.0, 0.0),
 			Dial("Rate", 0.01, 1.0, 0.0),
-			Dial("Dry", 0.001, 2.0, 1.0),
+			Dial("Wet", 0.001, 2.0, 1.0),
 			Dial("Delay"),
 		};
 		

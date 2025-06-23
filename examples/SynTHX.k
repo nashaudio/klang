@@ -7,7 +7,7 @@ using namespace klang::optimised;
 struct SynTHX : Stereo::Synth {
 	template<int HARMONICS>
 	struct Additive : Stereo::Oscillator {
-		struct Partial : Mono::Oscillator {
+		struct Partial : ::Mono::Oscillator {
 			Saw osc;
 			param f0, range, seed;
 			bool right;

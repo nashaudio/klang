@@ -2,47 +2,57 @@
 #include <klang.h>
 using namespace klang::optimised;
 
+signal hardclip(signal in){
+	if(in > 1)
+		return 1;
+	else if(in < -1)
+		return -1;
+	return in;
+}
+
 struct Waveguide : Synth {
 
 	struct WaveguideNote : public Note {
 	
 		struct Exciter : Generator {
+			Noise noise;
 			Envelope impulse;
 			Delay<19200> delay;
-			IIR filter;
+			LPF filter;
 			
 			void set(param frequency, param position, param material) {
 				const param time = fs.f / frequency - 2;
 				delay.set(position * time);
 				delay.clear();
 				impulse = { { 0.000, 0.0 }, { 0.001, 1.0 }, { 0.003, -1.0 }, { 0.004, 0.0 } };
-				filter.set(material);
 				filter.reset();
+				filter.set(material * 20000);
 			}
 			
 			void process() {
-				impulse - (impulse.out >> delay) >> filter >> out;
+				signal excitation = impulse;
+				excitation - (excitation >> delay) >> filter >> out;
 			}
 		} exciter;
 			
 		struct Resonator : Modifier {
 			Delay<19200> delay;
-			IIR filter;
+			IIR<1> filter;
 			param gain;
 			
 			void set(param frequency, param resonance, param dampening){
 				const param time = fs.f / frequency - 2;
 				delay.set(time);
 				delay.clear();
-				filter.set(dampening);
 				filter.reset();
+				filter.set(dampening);
 				gain = resonance;
 			}
 			
 			void process() {
 				signal feedback = (delay) * gain;
 				(in + feedback) >> out;
-				delay << out;
+				delay << hardclip(out);
 			}
 		} resonator;
 			

@@ -38,7 +38,7 @@ struct Bowed : Synth {
 			
 		struct Resonator : Modifier {	
 			Delay<19200> delay;
-			IIR filter;
+			IIR<1> filter;
 			param gain;
 			
 			void set(param frequency, param resonance, param dampening){
@@ -65,7 +65,7 @@ struct Bowed : Synth {
 			bow.start(f);
 			resonator.set(f, controls[0], controls[1]);
 			
-			adsr(0, 0, 1, 1);
+			adsr(0, 0, 1, 0.25);
 		}
 
 		event off(Amplitude velocity) {

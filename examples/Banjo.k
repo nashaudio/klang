@@ -6,7 +6,7 @@ float cubic(float x) { return x * x * x; }
 
 struct Banjo : Synth {
 	float playingNotes = 0;
-	IIR filter;
+	IIR<1> filter;
 	HPF dcfilter;
 	const float normalise;
 	
@@ -27,7 +27,7 @@ struct Banjo : Synth {
 			
 		struct Resonator : Modifier {
 			Delay<44100> delay;
-			IIR filter;
+			IIR<1> filter;
 			param gain;
 			
 			void process() {

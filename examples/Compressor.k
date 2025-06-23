@@ -84,7 +84,7 @@ struct Compressor : Effect {
 	}
 	
 	inline float softclip(float x, float c, const float threshold) {		
-		x = clip(x * (1 + abs(c)), 1);
+		x = clip(x * (1.f + abs(c)), 1);
 
 		if(c < 0)
 			c *= 0.005f;

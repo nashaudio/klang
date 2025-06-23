@@ -1,3 +1,4 @@
+
 #include <klang.h>
 using namespace klang::optimised;
 
@@ -23,6 +24,7 @@ struct Distortion : Modifier {
 signal invert(signal x){ return 1 - x; }
 signal nonlinear(signal x){ return pow(10, 2 * (x - 1)); }
 signal squared(signal x){ return x * x; }
+signal bipolar(signal x){ return pow(10, x); }
 
 struct OSC : Generator {
 	Saw osc1;
@@ -95,6 +97,8 @@ struct MOD : Generator {
 	}
 	
 	void process() {
+//		bipolar(env * amount) >> out;
+		
 		if(amount <= 0)
 			nonlinear(invert(env * -amount)) >> out;
 		else
@@ -113,11 +117,14 @@ struct LFO : Generator {
 	}
 	
 	void set(param f, param depth, param phase){
-		osc.set(f, phase);
+		set(f, depth);
 		LFO::depth = depth;
 	}
 	
 	void process() {
+//		signal lfo = osc * depth + depth;
+//		bipolar(lfo * amount) >> out;
+		
 		signal lfo = pow(2, (signal)osc) * 0.5;
 		if(amount <= 0)
 			nonlinear(invert(lfo * -amount * depth)) >> out;
@@ -199,7 +206,9 @@ struct Modular : Synth {
 		};
 		
 		presets = {
-			{ "Saint-Saens en Seine", { 1.000, 1.000, 1.000, 0.895, 0.491, 0.707, 0.984, 0.730, 0.349, 0.860, 0.790, 0.350, 0, 2617.376, 1.240, 1.000, 0.370, 0.280, 4.466, 0.650 } },
+//			{ "Saint-Saens en Seine", { 1.000, 1.000, 1.000, 0.895, 0.491, 0.707, 0.984, 0.730, 0.349, 0.860, 0.790, 0.350, 0, 2617.376, 1.240, 1.000, 0.370, 0.280, 4.466, 0.650 } },
+			{ "Saint-Saens en Seine", { 1.000, 1.000, 1.000, 0.895, 0.491, 0.707, 0.984, 0.730, 0.349, 0.860, 0.790, 0.350, 0, 3313.470, 1.240, 1.000, 0.370, 0.350, 4.118, 0.125 } },
+			
 			{ "Popcorn une fois", { 0.315, 1.000, 1.000, 0.720, 0.000, 0.465, 0.160, 0.510, 0.171, 0.000, 1.000, 0.000, 0, 5316.583, 3.088, 1.000, -0.400, -0.720, 4.966, 0.350 } },
 		};
 
