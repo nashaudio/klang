@@ -1,4 +1,4 @@
-## NB: A preview release of Klang Studio (v0.7.8) for Windows and Mac is now available from https://nash.audio/klang/studio. ##
+## NB: A preview release of Klang Studio (v0.8.0) for Windows and Mac is now available from https://nash.audio/klang/studio. ##
 
 # klang | C++ for audio
 
