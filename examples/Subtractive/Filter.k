@@ -26,8 +26,7 @@ struct Filter : Synth {
 		}
 
 		void process() {
-			filter.set(env, 10);
-			osc >> filter >> out;
+			osc >> filter(env, 10) >> out;
 			
 			out *= 0.25 *  adsr;
 			if (adsr.finished())
