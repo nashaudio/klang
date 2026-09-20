@@ -19,13 +19,10 @@ MySynth::MySynth()
 : Synth()
 {
     for(int n=0; n<32; n++) // create synthesiser's notes
-        notes[n] = new MyNote(this);
+        notes[n] = new MySynthNote(this);
     
     // Initialise synthesier variables, etc.
-	parameters.add("Input Gain");
-	parameters.add("Output Gain");
-	parameters.add("Filter Cutoff");
-	parameters.add("Transfer Function");
+	parameters.add("Gain", Parameter::ROTARY, 0, 1, 0.5);
 }
 
 // Destructor: called when the synthesiser is terminated / unloaded
@@ -62,9 +59,7 @@ void MySynth::process(const float** inputBuffers, float** outputBuffers, int num
     float fIn0, fIn1, fOut0 = 0, fOut1 = 0;
     const float *pfInBuffer0 = inputBuffers[0], *pfInBuffer1 = inputBuffers[1];
     float *pfOutBuffer0 = outputBuffers[0], *pfOutBuffer1 = outputBuffers[1];
-    
-//    float fGain = parameters[0];
-   
+      
     while(numSamples--)
     {
         // Get sample from input

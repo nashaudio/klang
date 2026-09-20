@@ -1,0 +1,3 @@
+# Treat text line endings as equivalent. Git stores text canonically while
+# editors and compilers may continue using LF, CRLF, or a mixture locally.
+* text=auto

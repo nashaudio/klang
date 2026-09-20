@@ -13,11 +13,6 @@ using namespace DSP;
 
 //#include "Extra.h"
 
-struct MyThing
-{
-	void Function(){ }
-};
-
 //===================================================================================================
 // MySynth - object representing the whole synthesiser (containing multiple note objects - see below)
 //===================================================================================================
@@ -25,8 +20,7 @@ struct MyThing
 class MySynth : public MiniPlugin::Synth
 {
 public:
-    // constructor (initialise variables, etc.)
-    MySynth();
+    MySynth();  // constructor (initialise variables, etc.)
     ~MySynth(); // destructor (clean up, free memory, etc.)
 
     void setSampleRate(float sampleRate){ stk::Stk::setSampleRate(sampleRate); }

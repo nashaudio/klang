@@ -1,5 +1,5 @@
 //
-//  SynthNote.h
+//  MySynthNote.h
 //  MySynth Plugin Header File - for individual notes
 //
 //  Used to declare objects and data structures used by the plugin.
@@ -13,10 +13,10 @@
 // MyNote - object representing a single note (within the synthesiser - see above)
 //================================================================================
 
-class MyNote : public DSP::Note
+class MySynthNote : public MiniPlugin::Note
 {
 public:
-    MyNote(MySynth* synthesiser) : Note(synthesiser), fFrequency(440.f), fLevel(1.f) { }
+    MySynthNote(MySynth* synthesiser) : Note(synthesiser), fFrequency(440.f), fVelocity(1.f) { }
     
     MySynth* getSynth() { return (MySynth*)synth; }
     
@@ -29,6 +29,6 @@ public:
     
 private:
 
-	float fFrequency, fLevel;
-    Saw signalGenerator;
+	float fFrequency, fVelocity;
+    Sine signalGenerator;
 };

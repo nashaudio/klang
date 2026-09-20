@@ -15,13 +15,11 @@ void myFunction2(double x, double& y){ y = sin(x * 2 * pi / 128); }
 //#define TABLE(name, type, size) Table<type, size> name = FUNCTION(type)
 //#define F(type) (void(*)(type, type&))[](type x, type& y)/
 	
-const Table<double, 128> sin_lookup = FUNCTION(double) { y = sin(x * 2 * pi / 128); };
+const Table<double, 128> sin_lookup = [](double x) { return sin(x * 2 * pi / 128); };
 
 //const TABLE(sin_lookup2, double, 128) { y = sin(x * 2 * pi / 128); };
 
 const Table<double, 4> val_lookup = { 0, 1, 2, 3 };
-
-
 
 struct FM : Synth {
 

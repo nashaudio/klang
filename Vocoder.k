@@ -28,18 +28,15 @@ struct Vocoder : Effect {
 			Dial("Detail", 0.1, 15, 10),
 		};
 		
-		const int width = 350 / BANDS;
+		const int width = 370 / BANDS;
 		for(int b=0; b<BANDS; b++){
 			controls.add("");
 			controls[5+b].type = Control::METER;
-			controls[5+b].size = { 50 + width * b, 150, width, 100 };
+			controls[5+b].size = { 25 + width * b, 150, width - 2, 100 };
 		}
 		
-		presets = {
+		controls.group("Vocoder Bands", 5, BANDS);
 		
-		};
-		
-	
 		for(int b=0; b<BANDS; b++)
 			f_scale[b] = random(0.99995f,1.00005f);
 			

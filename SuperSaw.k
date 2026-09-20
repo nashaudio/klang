@@ -37,10 +37,16 @@ struct SuperSaw : Synth {
 	SuperSaw() {		
 		controls = { 
 			// UI controls and parameters
-			Dial("Attack"),
-			Dial("Saw-Tri"),
-			Dial("Detune"),
-
+			Dial("Attack", 0.001, 1, 0.001),
+			Dial("Saw-Tri", 0, 1, 0.05),
+			Dial("Detune", 0, 1, 0.6),
+		};
+		
+		presets = {
+			{ "Pluck", { 0.001, 0.615, 0.098 } },
+			{ "Trance Lead", { 0.001, 0.1, 0.6 } },
+			{ "Synth Pad", { 1.000, 0.037, 0.167 } },
+			{ "Paris Traffic", { 0.126, 0.100, 1.000 } },
 		};
 
 		notes.add<MyNote>(32);

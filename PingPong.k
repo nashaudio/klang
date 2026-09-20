@@ -16,7 +16,7 @@ struct PingPong : Stereo::Effect {
 			Dial("Delay", 0.001, 1.0, 0.5),
 			Dial("Scratch", 0.0, 1.0, 0.0),
 			Dial("Rate", 0.01, 1.0, 0.0),
-			Dial("Dry", 0.001, 2.0, 1.0),
+			Dial("Wet", 0.001, 2.0, 1.0),
 			Dial("Delay"),
 		};
 		
@@ -43,7 +43,7 @@ struct PingPong : Stereo::Effect {
 	void process() {
 		const param rate = sqr(controls[3]) * 100.f;
 		const param new_delay = controls[5].smooth();
-		if(std::abs(delay - new_delay) > 0.0001f){
+		if(std::abs(delay - new_delay) > 0.001){
 			delay = new_delay;
 			controls[1].set(new_delay);	
 			lfo.set(rate, pi);
@@ -56,8 +56,8 @@ struct PingPong : Stereo::Effect {
 		const param delay = controls[1].smooth();
 		const param vibrato = sqr(controls[2]) * rate * root2;
 		const param dry = controls[4];
-		controls[1].set(controls[1] + lfo * vibrato * 0.00005f);
-			
+		controls[1].set(controls[1] + lfo * vibrato * 0.00005);
+				
 		left.set(delay * fs);
 		right.set(0.5f * delay * fs);
 	

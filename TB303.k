@@ -103,11 +103,11 @@ struct TB303 : Synth {
 		void process() {
 			const bool is_square = controls[3] == 1;
 			const signal osc = is_square ? (signal)(square * 0.5f) : (signal)saw;
-			const float fc = (f + (controls[0]^2) * fs.nyquist) * ((env++)^2);
+			const signal fc = (f + sqr(controls[0]) * fs.nyquist) * sqr(env);
 			const float hpf_f = 10.f + 490.f * controls[1]; // + 0.f * controls[0];
 			filter.set(fc, (is_square ? 0.9f : 1.f) * controls[1], controls[4]);
 			filter.setHPF(hpf_f);
-			(osc >> filter) * adsr++ >> out;
+			(osc >> filter) * adsr >> out;
 			if (adsr.finished())
 				stop();
 		}

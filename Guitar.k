@@ -17,7 +17,7 @@ struct Guitar : Synth {
 		struct Excitation : Generator {
 			Envelope impulse;
 			Delay<44100> delay;
-			IIR filter[2];
+			IIR<1> filter[2];
 			Noise noise;
 			
 			void process() {
@@ -28,7 +28,7 @@ struct Guitar : Synth {
 			
 		struct Resonator : Modifier {
 			Delay<44100> delay;
-			IIR filter[2];
+			IIR<1> filter[2];
 			param gain;
 			
 			void process() {

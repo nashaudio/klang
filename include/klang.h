@@ -1,8 +1,27 @@
-#pragma once
+#ifdef abs
+#undef abs
+#endif
+#ifdef sqrt
+#undef sqrt
+#endif
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef clamp
+#undef clamp
+#endif
+
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <cmath>
+#include <math.h>
 #include <limits>
 #include <assert.h>
 #include <array>
@@ -10,30 +29,67 @@
 #include <vector>
 #include <string>
 #include <cstdarg>
+#include <cstring>
+#include <climits>
+#include <thread>
 #include <algorithm>
 #include <type_traits>
 #include <mutex>
 #include <functional>
-
 #include <float.h>
+#include <utility>
+#include <chrono>
+
+#define HAS_KLANG 1
+
+// Set to 1 before including Klang to restore compiler warnings suppressed for
+// compatibility with the supported host/plugin builds.
+#ifndef KLANG_STRICT
+#define KLANG_STRICT 0
+#endif
+
+#if defined(_MSC_VER) && !KLANG_STRICT
+#pragma warning(push)
+#pragma warning(disable: 4587 4263 4264 4996)
+#define KLANG_WARNING_SCOPE 1
+#endif
+
+// Studio wrappers define KLANG in both Release and Debug builds.
+// Other hosts may opt in explicitly; use one setting throughout a module.
+#ifndef HAS_KLANG_DEBUG
+#if defined(KLANG) && KLANG
+#define HAS_KLANG_DEBUG 1
+#else
+#define HAS_KLANG_DEBUG 0
+#endif
+#endif
+
+#pragma once
 
 #ifdef __wasm__
-#define THREAD_LOCAL 
+#define THREAD_LOCAL
 static inline float _sqrt(float x) { return __builtin_sqrtf(x); }
 static inline float _abs(float x) { return __builtin_fabsf(x); }
 #define SQRT _sqrt
 #define SQRTF _sqrt
 #define ABS _abs
 #define FABS _abs
-#endif
-#ifdef __APPLE__
+
+#elif defined(__APPLE__)
 #define THREAD_LOCAL
 #define SQRT ::sqrt
 #define SQRTF ::sqrtf
 #define ABS ::abs
 #define FABS ::fabsf
-#endif
-#if defined(__WIN32__) || defined(WIN32)
+
+#elif defined(_MSC_VER)
+#define THREAD_LOCAL thread_local
+#define SQRT ::sqrt
+#define SQRTF ::sqrtf
+#define ABS ::abs
+#define FABS ::fabsf
+
+#else
 #define THREAD_LOCAL thread_local
 #define SQRT ::sqrt
 #define SQRTF ::sqrtf
@@ -53,14 +109,6 @@ static inline float _abs(float x) { return __builtin_fabsf(x); }
 
 #define GRAPH_SERIES 4
 
-// provide access to original math functions through std:: prefix
-namespace std {
-	namespace klang {
-		template<typename TYPE> TYPE sqrt(TYPE x) { return SQRT(x); }
-		template<typename TYPE> TYPE abs(TYPE x) { return ABS(x); }
-	}
-};
-
 #define IS_SIMPLE_TYPE(type)																					\
 	static_assert(!std::is_polymorphic_v<type>, "signal has virtual table");									\
 	static_assert(!std::has_virtual_destructor_v<type>, "signal has virtual destructor");						\
@@ -69,9 +117,10 @@ namespace std {
 	static_assert(std::is_trivially_copy_constructible_v<type>, "signal is not trivially copy assignable");		\
 	static_assert(std::is_trivially_destructible_v<type>, "signal is not trivially copy assignable");			\
 	static_assert(std::is_trivially_move_assignable_v<type>, "signal is not trivially copy assignable");		\
-	static_assert(std::is_trivially_move_constructible_v<type>, "signal is not trivially copy assignable");	
+	static_assert(std::is_trivially_move_constructible_v<type>, "signal is not trivially copy assignable");
 
 namespace klang {
+	typedef unsigned char byte;
 
 	/// Klang language version (major.minor.build.debug)
 	struct Version {
@@ -82,7 +131,7 @@ namespace klang {
 		}
 		bool below(unsigned char M, unsigned char m, unsigned char b) const { return !atLeast(M, m, b); }
 	}
-	static constexpr version = { 0, 7, 6, KLANG_DEBUG };
+	static constexpr version = { 0, 7, 10, KLANG_DEBUG };
 
 	/// Klang mode identifiers (e.g. averages, level following)
 	enum Mode { Peak, RMS, Mean };
@@ -113,7 +162,6 @@ namespace klang {
 #define CONSTANT constexpr constant
 
 #if __cplusplus == 201703L
-#pragma warning(disable:4996) // disable deprecated warning
 	/// @internal
 	template <typename T>
 	inline constexpr bool is_literal = std::is_literal_type_v<T>;
@@ -321,6 +369,698 @@ namespace klang {
 		Array() = default; // Default constructor to allow empty initialization
 	};
 
+	struct Memory
+	{
+		typedef unsigned char Byte;
+		typedef Byte* Pointer;
+
+		Pointer start, ptr, end;
+		size_t size;
+		bool owned;
+
+		Memory() {
+			detach();
+		}
+
+		Memory(size_t size) {
+			create(size);
+		}
+
+		~Memory() {
+			free();
+		}
+
+		// attach to an existing buffer
+		void attach(unsigned char* data, size_t size, bool own = false) {
+			Memory::size = size;
+			start = ptr = data;
+			end = start + size;
+			owned = own;
+		}
+
+		// detach from the buffer (without freeing it)
+		void detach() {
+			start = ptr = end = nullptr;
+			size = 0;
+			owned = false;
+		}
+
+		// allocate memory
+		bool create(size_t size) {
+			free();
+			start = ptr = new Byte[size];
+			if (start) {
+				Memory::size = size;
+				end = start + size;
+				owned = true;
+				return true;
+			}
+			return false;
+		}
+
+		// clear memory
+		void clear() {
+			memset(start, 0, size);
+		}
+
+		// rewind memory to start
+		void rewind() {
+			ptr = start;
+		}
+
+		// rewind memory
+		void rewind(int bytes) {
+			ptr -= bytes;
+		}
+
+		// skip / fastforward memory
+		void skip(int bytes) {
+			ptr += bytes;
+		}
+
+		// release memory
+		void free() {
+			if (owned && start) {
+				ptr = end = nullptr;
+				delete[] start;
+				start = nullptr;
+				size = 0;
+			}
+		}
+
+		// check if pointer is at end of memory
+		bool finished() const {
+			return ptr >= end;
+		}
+
+		// return memory-mapped file pointer
+		FILE* file() {
+			FILE* f = fopen("/dev/null", "wt");
+			if (!f) f = fopen("nul", "wt");
+			setvbuf(f, (char*)start, _IOFBF, size);
+			return f;
+		}
+
+		bool load(const char* path) {
+			FILE* f = fopen(path, "rb");
+			if (!f) return false;
+
+			// find out length of file
+			fseek(f, 0, SEEK_END);
+			size_t length = ftell(f);
+			fseek(f, 0, SEEK_SET);
+
+			// allocate memory and read file
+			if (!create(length)) {
+				fclose(f);
+				return false;
+			}
+			fread(start, 1, length, f);
+			fclose(f);
+
+			return true;
+		}
+
+		// retrieve the next value from memory
+		template<typename TYPE>
+		bool get(TYPE& value) {
+			if (ptr + sizeof(TYPE) > end) {
+				ptr = end;
+				return false;
+			}
+			value = *(TYPE*)ptr;
+			ptr += sizeof(TYPE);
+			return true;
+		}
+
+		// retrieve the next value from memory
+		template<typename TYPE>
+		operator TYPE() {
+			TYPE value;
+			get(value);
+			return value;
+		}
+
+		// add a value to the memory
+		template<typename TYPE>
+		bool add(const TYPE& value) {
+			if (ptr + sizeof(TYPE) > end)
+				return false;
+			*(TYPE*)ptr = value;
+			ptr += sizeof(TYPE);
+			return true;
+		}
+
+		// add a value to the memory
+		template<typename TYPE>
+		Memory& operator+=(const TYPE& value) {
+			add(value);
+			return *this;
+		}
+
+		// check if memory is equal to a value
+		template<typename TYPE>
+		bool operator==(const TYPE& value) const {
+			if (ptr + sizeof(TYPE) > end)
+				return false;
+			return value == *(TYPE*)ptr;
+		}
+
+		// copy memory from another memory object (with resize)
+		Memory& operator=(const Memory& memory) {
+			if (ptr + memory.size > end)
+				return *this;
+			create(memory.size);
+			memcpy(start, memory.start, memory.size);
+			return *this;
+		}
+
+		// attach memory to another memory object
+		Memory& operator=(Memory* memory) {
+			free();
+			attach(memory->start, memory->size);
+			return *this;
+		}
+
+		// add memory data from another memory object
+		Memory& operator+=(const Memory& memory) {
+			if (ptr + memory.size > end)
+				return *this;
+			memcpy(ptr, memory.start, memory.size);
+			ptr += memory.size;
+			return *this;
+		}
+
+		//operator int() {
+		//	if (ptr + sizeof(int) > end) {
+		//		ptr = end;
+		//		return 0;
+		//	}
+		//	ptr += sizeof(int);
+		//	return *(int*)(ptr - sizeof(int));
+		//}
+
+		//operator float() {
+		//	if (ptr + sizeof(float) > end) {
+		//		ptr = end;
+		//		return 0;
+		//	}
+		//	ptr += sizeof(float);
+		//	return *(float*)(ptr - sizeof(float));
+		//}
+
+	//	int geti1() {
+	//		if ((++_ptr) > _end) {
+	//			if (_ptr == _end)
+	//				return (*(BYTE*)(_ptr - 1));
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return (*(int*)(_ptr - 1)) & 0xFF;
+	//	}
+
+	//	int geti2() {
+	//		if ((_ptr += 2) >/*=*/ _end) {
+	//			//            if(_ptr == _end)
+	//			//                return (*(short*)(_ptr - 2));
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return (*(int*)(_ptr - 2)) & 0xFFFF;
+	//	}
+
+	//	//	int geti3() {
+	//	//		if ((_ptr += 3) > _end) {
+	//	//			_ptr = _end;
+	//	//			return 0;
+	//	//		}
+	//	//		return (*(int*)(_ptr - 3)) & 0xFFFFFF;
+	//	//	}
+
+	//	int geti4() {
+	//		if ((_ptr += 4) > _end) {
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return (*(int*)(_ptr - 4)) & 0xFFFFFFFF;
+	//	}
+
+	//	int geti(const int size) {
+	//		switch (size) {
+	//		case 1: return geti1();
+	//		case 2: return geti2();
+	//			//		case 3: return geti3();
+	//		case 4: return geti4();
+	//		default:
+	//			int number = getc();
+	//			for (int i = 1; i < size; i++)           // (collate bytes into multi-byte integer)
+	//				number += (1 << (i * 8)) * getc();  // pow(256.0,  i) * getc();		//
+	//			return number;							// (return results)
+	//		}
+	//	}
+
+	//	int getbe(int size) {
+	//		int number = getc();
+	//		while (--size) {
+	//			number <<= 8;
+	//			number += getc();
+	//		}
+	//		return number;
+	//	}
+
+	//	bool putc(char c) {
+	//		if (_ptr < _end) {
+	//			*_ptr++ = c;
+	//			return true;
+	//		}
+	//		return false;
+	//	}
+
+	//	size_t write(const void* src, const size_t size, const size_t count) {
+	//		if ((_ptr + size * count) <= _end) {
+	//			memcpy(_ptr, src, size * count);
+	//			_ptr += size * count;
+	//			return size;
+	//		}
+	//		else {
+	//			_ptr = _end;
+	//		}
+	//		return 0;
+	//	}
+
+	//	/*int getshort(){
+	//		_ptr+=sizeof(short);
+	//		if(_ptr > _end){
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return *(int*)(_ptr-sizeof(short));
+	//	}
+
+	//	int getint(){
+	//		_ptr+=sizeof(int);
+	//		if(_ptr > _end){
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		return *(int*)(_ptr-sizeof(int));
+	//	}*/
+
+	//	bool eof() const {
+	//		return _ptr >= _end;
+	//	}
+
+	//	int getvari(void)
+	//	{
+	//		int    value;
+	//		short	c;
+
+	//		if ((value = getc()) & 0x80) {
+	//			value &= 0x7f;
+	//			do {
+	//				value = (value << 7) + ((c = getc()) & 0x7f);
+	//			} while (c & 0x80);
+	//		}
+	//		return value;
+	//	}
+
+	//	char* gets(int length) {
+	//		if ((_ptr + length) >= _end) {
+	//			_ptr = _end;
+	//			_string[0] = 0;
+	//		}
+	//		else {
+	//			memcpy(_string, _ptr, MIN(length, 255));
+	//			_string[MIN(length, 255)] = 0;
+	//			_ptr += length;
+	//		}
+	//		return _string;
+	//	}
+
+	//	char* gets0(int length) {
+	//		if ((_ptr + length) >= _end) {
+	//			_ptr = _end;
+	//			_string[0] = 0;
+	//		}
+	//		else {
+	//			memcpy(_string, _ptr, MIN(length, 255));
+	//			_string[MIN(length, 255)] = 0;
+	//			if (!_string[0])
+	//				_string[0] = ' ';
+	//			_ptr += length;
+	//		}
+	//		return _string;
+	//	}
+
+	//	char* gets_any(const char* const of) {
+	//		_string[0] = 0;
+
+	//		int length = 0;
+	//		while (!eof() && length < 255) {
+	//			unsigned char ch = *_ptr;
+	//			if (strchr(of, ch)) { // valid character
+	//				_string[length++] = ch;
+	//				_ptr++;
+	//			}
+	//			else {
+	//				_string[length] = 0;
+	//				return _string;
+	//			}
+	//		}
+	//		_string[length] = 0;
+	//		return _string;
+	//	}
+
+	//	static bool isNumeric(char x) {
+	//		return (x >= '0' && x <= '9');
+	//	}
+
+	//	char* gets_numeric() {
+	//		_string[0] = 0;
+
+	//		int length = 0;
+	//		while (!eof() && length < 255) {
+	//			unsigned char ch = *_ptr;
+	//			if (isNumeric(ch)) { // valid character
+	//				_string[length++] = ch;
+	//				_ptr++;
+	//			}
+	//			else {
+	//				_string[length] = 0;
+	//				return _string;
+	//			}
+	//		}
+	//		_string[length] = 0;
+	//		return _string;
+	//	}
+
+	//	static bool isHexadecimal(char x) {
+	//		return (x >= 'A' && x <= 'F') || (x >= '0' && x <= '9');
+	//	}
+
+	//	char* gets_hex() {
+	//		_string[0] = 0;
+
+	//		int length = 0;
+	//		while (!eof() && length < 255) {
+	//			unsigned char ch = *_ptr;
+	//			if (isHexadecimal(ch)) { // valid character
+	//				_string[length++] = ch;
+	//				_ptr++;
+	//			}
+	//			else {
+	//				_string[length] = 0;
+	//				return _string;
+	//			}
+	//		}
+	//		_string[length] = 0;
+	//		return _string;
+	//	}
+
+	//	void gets(char* string, int length) {
+	//		if ((_ptr + length) >= _end) {
+	//			_ptr = _end;
+	//			return;
+	//		}
+	//		memcpy(string, _ptr, length);
+	//		string[length] = 0;
+	//		_ptr += length;
+	//	}
+
+	//	/*	void gets(std::string& string, int length){
+	//			if((_ptr + length) >= _end){
+	//				_ptr = _end;
+	//				return;
+	//			}
+
+	//	//		memcpy(string, _ptr, length);
+	//	//		string[length] = 0;
+	//			string.copy((char*)_ptr, length);
+	//			string.append(0);
+
+	//			_ptr += length;
+	//		}*/
+
+	//	void gets(char* string) {
+	//		if (eof()) return;
+	//		gets(string, getc());
+	//	}
+
+	//	/*void gets0(char* string, int length){
+	//		if((_ptr + length) >= _end){
+	//			_ptr = _end;
+	//			return;
+	//		}
+	//		memcpy(string, _ptr, length);
+	//		string[length] = 0;
+	//		if(string[0] == 0)
+	//			string[0] = ' ';
+	//		_ptr += length;
+	//	}*/
+
+	//	void gets(char* string, char terminator, unsigned int length) {
+	//		const BYTE_PTR _end = std::min(_ptr + length, this->_end);
+	//		BYTE_PTR _offset;
+	//		for (_offset = _ptr; _offset < _end; _offset++) {
+	//			if (*_offset == terminator)
+	//				break;
+	//		}
+	//		//		if(_offset != _end){
+	//		const unsigned int _len = (unsigned int)(_offset - _ptr);
+	//		memcpy(string, _ptr, _len);
+	//		string[std::min(length - 1, _len)] = 0;
+	//		//		}
+	//		_ptr = _offset;
+	//	}
+
+	//	static bool isAlphaNumeric(char x) {
+	//		return (x >= 'a' && x <= 'z') || (x >= 'A' && x <= 'Z') || (x >= '0' && x <= '9');
+	//	}
+
+	//	void gettag(char* string) {
+	//		while (isAlphaNumeric(*_ptr)) {
+	//			*string++ = *_ptr++;
+	//		}
+	//		*string = 0;
+	//	}
+
+	//	void getcs(char* string) {
+	//		if (_ptr > _end) {
+	//			string[0] = 0;
+	//			return;
+	//		}
+	//		const int length = *_ptr;
+	//		if ((_ptr + length) > _end) {
+	//			string[0] = 0;
+	//			return;
+	//		}
+	//		_ptr++;
+	//		memcpy(string, _ptr, length);
+	//		_ptr += length;
+	//	}
+
+	//	int read(void* to, const int size) {
+	//		if ((_ptr + size) > _end) {
+	//			_ptr = _end;
+	//			return 0;
+	//		}
+	//		memcpy(to, _ptr, size);
+	//		_ptr += size;
+	//		return size;
+	//	}
+
+	//	void skip(const int size) {
+	//		if ((_ptr + size) > _end) {
+	//			_ptr = _end;
+	//			return;
+	//		}
+	//		_ptr += size;
+	//	}
+
+	//	void skip_any(char token) {
+	//		while (!eof()) {
+	//			if (*_ptr != token)
+	//				return;
+	//			_ptr++;
+	//		}
+	//	}
+
+	//	void skip_any(const char* tokens) {
+	//		while (!eof()) {
+	//			const char* pTokens = tokens;
+	//			while (*pTokens != '\0') {
+	//				if (*_ptr == *pTokens)
+	//					break;
+	//				pTokens++;
+	//			}
+	//			if (*pTokens)
+	//				_ptr++;
+	//			else
+	//				return;
+	//		}
+	//	}
+
+	//	bool skip_to(char token) {
+	//		while (!eof()) {
+	//			if (*_ptr == token)
+	//				return true;
+	//			_ptr++;
+	//		}
+	//		return false;
+	//	}
+
+	//	bool skip_to(const char* token) {
+	//		size_t length = strlen(token);
+	//		while (!eof()) {
+	//			if (!memcmp(token, _ptr, length)) {
+	//				_ptr += length;
+	//				return true;
+	//			}
+	//			_ptr++;
+	//		}
+	//		return false;
+	//	}
+
+	//	void skip_to_any(const char* tokens) {
+	//		while (!eof()) {
+	//			const char* pTokens = tokens;
+	//			while (*pTokens != '\0') {
+	//				if (*_ptr == *pTokens++)
+	//					return;
+	//			}
+	//			_ptr++;
+	//		}
+	//	}
+
+	//	bool match_i(const char* stuff) {													// matches given text with file
+	//		size_t length = strlen(stuff);																	// (reset expectation)
+	//		if (!_strnicmp(stuff, (const char*)_ptr, length)) {
+	//			_ptr += length;
+	//			return true;
+	//		}
+	//		return false;
+	//	}
+
+	//	bool match(const char* stuff) {													// matches given text with file
+	//		size_t length = strlen(stuff);																	// (reset expectation)
+	//		if (!memcmp(stuff, _ptr, length)) {
+	//			_ptr += length;
+	//			return true;
+	//		}
+	//		return false;
+	//	}																																				//
+
+	//	bool match(char stuff) {													// matches given text with file
+	//		if (*_ptr == stuff) {
+	//			_ptr++;
+	//			return true;
+	//		}
+	//		return false;
+	//	}
+
+	//	// in-place character replacement
+	//	int replace(BYTE find, BYTE replace) {
+	//		int nbReplaced = 0;
+	//		BYTE_PTR ptr = _buf;
+	//		while (ptr < _end) {
+	//			if (*ptr == find)
+	//				*ptr = replace;
+	//			nbReplaced++;
+	//			ptr++;
+	//		}
+	//		return nbReplaced;
+	//	}
+
+	//	// in-place phrase replacement
+	//	int replace_fast(const char* find, const char* replace) {
+	//		// build new string
+	//		const char* str = (const char*)_buf;
+	//		const char* end = (const char*)_end;
+	//		const int length = (int)strlen(replace);
+	//		int nbReplaced = 0;
+
+	//		while (str < end) {
+	//			if (!memcmp(str, find, length)) { // match
+	//				memcpy((void*)str, replace, length);
+	//				str += length;
+	//				nbReplaced++;
+	//			}
+	//			else {
+	//				str++;
+	//			}
+	//		}
+	//		return nbReplaced;
+	//	}
+
+	//	int replace(const char* find, const char* replace) {
+	//		const int cbFind = (int)strlen(find);
+	//		const int cbReplace = (int)strlen(replace);
+	//		if (cbFind == cbReplace) // no memory re-allocation required
+	//			return replace_fast(find, replace);
+
+	//		// build new string
+	//		std::string new_str;
+	//		const char* str = (const char*)_buf;
+	//		const char* last = str;
+	//		const char* end = (const char*)_end;
+	//		int nbReplaced = 0;
+
+	//		while (str < end) {
+	//			if (!memcmp(str, find, cbFind)) { // match
+	//				new_str.append(last, str - last); // catch-up
+	//				new_str += replace;
+	//				str += cbFind;
+	//				last = str;
+	//				nbReplaced++;
+	//			}
+	//			else {
+	//				str++;
+	//			}
+	//		}
+	//		if (last < end)
+	//			new_str.append(last, end - last);
+
+	//		// replace buffer with new string
+	//		create((int)new_str.length());
+	//		memcpy(_buf, new_str.data(), new_str.length());
+	//		return nbReplaced;
+	//	}
+
+	//	bool match_any(const char* stuffs) {
+	//		while (*stuffs != '\0') {
+	//			if (*_ptr == *stuffs++) {
+	//				_ptr++;
+	//				return true;
+	//			}
+	//		}
+	//		return false;
+	//	}
+
+	//	unsigned int length() const { return _len; }
+	//	const BYTE_PTR buffer() const { return _buf; }
+	//	BYTE_PTR buffer() { return _buf; }
+	//	BYTE_PTR pointer() { return _ptr; }
+	//	BYTE_PTR* ppointer() { return &_ptr; }
+
+	//	unsigned int offset() const { return (unsigned int)(_ptr - _buf); }
+	//	bool seek(unsigned int offset) {
+	//		_ptr = _buf + offset;
+	//		if (_ptr > _end) {
+	//			_ptr = _end;
+	//			return false;
+	//		}
+	//		else return true;
+	//	}
+	//protected:
+	//	BYTE_PTR _buf;
+	//	unsigned int _len;
+
+	//	BYTE_PTR _end;
+	//	BYTE_PTR _ptr;
+
+	//	char _string[256];
+	};
+
 	/// String of characters representing text.
 	template<int SIZE>
 	struct Text {
@@ -485,7 +1225,7 @@ namespace klang {
 		/// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
 		relative operator+() const;	// unary + operator produces relative signal
 		/// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
-		relative relative() const;	// 
+		relative relative() const;	//
 	};
 
 	/// @internal signal MUST compile as a float
@@ -500,15 +1240,32 @@ namespace klang {
 	/// Returns a copy of the signal to treat as a relative offset (e.g. for phase modulation).
 	inline relative signal::relative() const { return { value }; }
 
-	/// Stream a literal / constant / scalar type into a signal.
-	inline static signal& operator>>(float input, signal& destination) { // CHECK: should this be signal, rather than float?
-		destination << signal(input);
+	/// Stream a built-in arithmetic value into a signal, narrowing at the signal boundary.
+	template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+	inline signal& operator>>(TYPE input, signal& destination) {
+		destination << signal(static_cast<float>(input));
 		return destination;
 	}
+	/// Stream a Klang constant into a signal.
+	inline signal& operator>>(const constant& input, signal& destination) {
+		destination << signal(input.f);
+		return destination;
+	}
+
+	/// A stateless unary C/C++ function that maps one float sample to another.
+	using UnaryFunction = float(float);
+
+	/// Apply an ordinary unary function within a signal-flow expression.
+	inline signal operator>>(signal input, UnaryFunction& function) {
+		return function(float(input));
+	}
+
 
 	/// A multi-channel audio signal (e.g. stereo).
 	template<int CHANNELS = 2>
 	struct signals {
+		static_assert(CHANNELS > 0, "signals requires at least one channel");
+#if !defined(__GNUC__) || defined(__clang__) // non-GNU compilers support anonymous unions; GNU compilers do not (and produce warnings/errors)
 		/// @cond
 		union {
 			signal value[CHANNELS]; ///< Array of channel values.
@@ -519,34 +1276,85 @@ namespace klang {
 		};
 		/// @endcond
 
-		/// Return the mono mix of a stereo channel.
-		signal mono() const { return (l + r) * 0.5f; }
+		/// Create a multi-channel signal by broadcasting the given value.
+		signals(float initial = 0.f) { for (int channel = 0; channel < CHANNELS; channel++) value[channel] = initial; }
+		/// Create a multi-channel signal by broadcasting the given value.
+		signals(double initial) : signals((float)initial) {}
+		/// Create a multi-channel signal by broadcasting the given value.
+		signals(int initial) : signals((float)initial) {}
+		/// Create a multi-channel signal by broadcasting the given signal.
+		signals(const klang::signal& initial) { for (int channel = 0; channel < CHANNELS; channel++) value[channel] = initial; }
+
+		/// Create a multi-channel signal with the first two channel values; remaining channels are zero.
+		signals(float left, float right) : signals(0.f) { l = left; r = right; }
+		/// Create a multi-channel signal with the first two channel values; remaining channels are zero.
+		signals(double left, double right) : signals((float)left, (float)right) {}
+		/// Create a multi-channel signal with the first two channel values; remaining channels are zero.
+		signals(int left, int right) : signals((float)left, (float)right) {}
+
+		/// Create a multi-channel signal with the given channel values.
+		template <typename... Args, typename = std::enable_if_t<sizeof...(Args) == CHANNELS && (std::is_convertible_v<Args, signal> && ...)>>
+		signals(Args&... initial) : value{ initial... } {}
+		/// Create a multi-channel signal with the given channel values.
+		template <typename... Args, typename = std::enable_if_t<sizeof...(Args) == CHANNELS && (std::is_scalar_v<Args> && ...)>>
+		signals(Args... initial) : value{ initial... } {}
+#else
+		signal value[CHANNELS]; ///< Array of channel values.
+		signal& l = value[0]; ///< Left channel
+		signal& r = value[1]; ///< Right channel
+
+		/// Create a multi-channel signal by broadcasting the given value.
+		signals(float initial = 0.f) { for (int v = 0; v < CHANNELS; v++) value[v] = initial; }
+		/// Create a multi-channel signal by broadcasting the given value.
+		signals(double initial) : signals((float)initial) {}
+		/// Create a multi-channel signal by broadcasting the given value.
+		signals(int initial) : signals((float)initial) {}
+		/// Create a multi-channel signal by broadcasting the given signal.
+		signals(const klang::signal& initial) { for (int v = 0; v < CHANNELS; v++) value[v] = initial; }
+
+		/// Create a multi-channel signal with the first two channel values; remaining channels are zero.
+		signals(float left, float right) { l = left; r = right; for (int v = 2; v < CHANNELS; v++) value[v] = 0.f; }
+		/// Create a multi-channel signal with the first two channel values; remaining channels are zero.
+		signals(double left, double right) : signals((float)left, (float)right) {}
+		/// Create a multi-channel signal with the first two channel values; remaining channels are zero.
+		signals(int left, int right) : signals((float)left, (float)right) {}
+
+		/// Create a multi-channel signal with the given channel values.
+		template <typename... Args, typename = std::enable_if_t<sizeof...(Args) == CHANNELS && (std::is_convertible_v<Args, signal> && ...)>>
+		signals(Args&... initial) : value{ initial... } {}
+		/// Create a multi-channel signal with the given channel values.
+		template <typename... Args, typename = std::enable_if_t<sizeof...(Args) == CHANNELS && (std::is_scalar_v<Args> && ...)>>
+		signals(Args... initial) : value{ initial... } {}
+
+		signals& operator=(const signals& input) { for (int v = 0; v < CHANNELS; v++) value[v] = input[v]; return *this; }
+#endif
+		/// Evaluate a mono Klang object once and broadcast its signal to every channel.
+		template<typename TYPE, std::enable_if_t<!std::is_arithmetic_v<std::decay_t<TYPE>> &&
+			!std::is_same_v<std::decay_t<TYPE>, klang::signal> && std::is_convertible_v<TYPE&, klang::signal>, int> = 0>
+		signals(TYPE& initial) {
+			const klang::signal mono = initial;
+			for (int channel = 0; channel < CHANNELS; channel++)
+				value[channel] = mono;
+		}
+
+		/// Return the sum of all channels.
+		klang::signal sum() const {
+			klang::signal result = 0;
+			for (int channel = 0; channel < CHANNELS; channel++)
+				result += value[channel];
+			return result;
+		}
+
+		/// Return the arithmetic mean of all channels.
+		klang::signal average() const { return sum() / float(CHANNELS); }
+
+		/// Return the default mono downmix: the arithmetic mean of all channels.
+		klang::signal mono() const { return average(); }
 
 		/// Return a reference to the signal at the specified index (0 = left, 1 = right).
 		signal& operator[](int index) { return value[index]; }
 		/// Return a read-only reference to the signal  at the specified index (0 = left, 1 = right).
 		const signal& operator[](int index) const { return value[index]; }
-
-		/// Create a stereo signal with the given value.
-		signals(float initial = 0.f) : l(initial), r(initial) {}
-		/// Create a stereo signal with the given value.
-		signals(double initial) : l((float)initial), r((float)initial) {}
-		/// Create a stereo signal with the given value.
-		signals(int initial) : l((float)initial), r((float)initial) {}
-
-		/// Create a stereo signal with the given left and right value.
-		signals(float left, float right) : l(left), r(right) {}
-		/// Create a stereo signal with the given left and right value.
-		signals(double left, double right) : l((float)left), r((float)right) {}
-		/// Create a stereo signal with the given left and right value.
-		signals(int left, int right) : l((float)left), r((float)right) {}
-
-		/// Create a multi-channel signal with the given channel values.
-		template <typename... Args, typename = std::enable_if_t<(std::is_convertible_v<Args, signal> && ...)>>
-		signals(Args&... initial) : value{ initial... } {}
-		/// Create a multi-channel signal with the given channel values.
-		template <typename... Args, typename = std::enable_if_t<(std::is_scalar_v<Args> && ...)>>
-		signals(Args... initial) : value{ initial... } {}
 
 		/// Returns the number of channels in the signal.
 		int channels() const { return CHANNELS; }
@@ -669,6 +1477,12 @@ namespace klang {
 		param(const signal& in) : signal(in) {}
 		param(signal& in) : signal(in) {}
 		param(Control& in); // see Control declaration
+		template<typename SOURCE, std::enable_if_t<!std::is_arithmetic_v<std::decay_t<SOURCE>> &&
+			!std::is_base_of_v<signal, std::decay_t<SOURCE>> &&
+			!std::is_same_v<std::decay_t<SOURCE>, Control> &&
+			std::is_convertible_v<SOURCE&&, const signal&>, int> = 0>
+		param(SOURCE&& source)
+			: signal(static_cast<const signal&>(std::forward<SOURCE>(source))) {}
 
 		param& operator+=(const increment& increment) {
 			value += increment.amount;
@@ -823,31 +1637,34 @@ namespace klang {
 		using param::param;
 		/*Phase(const float p = 0.f) : param(p) { };*/
 
-		param& operator+=(float increment) {
-			if (increment >= (2 * pi))
-				return *this;
-			value += increment;
-			if (value > (2 * pi))
-				value -= (2 * pi);
+		/// Wrap a finite phase to [0, cycle); invalid values become zero.
+		static float wrap(float phase, float cycle = 2 * pi) {
+			if (!std::isfinite(phase) || !std::isfinite(cycle) || cycle <= 0) return 0;
+			const float turn = cycle;
+			if (phase >= 0 && phase < turn) return phase;
+			phase = std::fmod(phase, turn);
+			return phase < 0 ? phase + turn : phase;
+		}
+
+		/// Return this phase plus an optional offset, wrapped to one turn.
+		float wrapped(float offset = 0) const { return wrap(value + offset); }
+
+		param& operator+=(float step) {
+			value += step;
+			if (value < 0 || value >= (2 * pi))
+				value = wrap(value);
 			return *this;
 		}
 
-		param& operator+=(const increment& increment) {
-			if (increment.amount >= increment.size)
-				return *this;
-			value += increment.amount;
-			if (value > increment.size)
-				value -= increment.size;
+		param& operator+=(const increment& step) {
+			value += step.amount;
+			if (value < 0 || value >= step.size)
+				value = wrap(value, step.size);
 			return *this;
 		}
 
-		Phase operator+(const increment& increment) const {
-			if (increment.amount >= increment.size)
-				return value;
-			Phase value = Phase::value + increment.amount;
-			if (value > increment.size)
-				value -= increment.size;
-			return value;
+		Phase operator+(const increment& step) const {
+			return wrap(value + step.amount, step.size);
 		}
 
 		Phase operator%(float modulus) {
@@ -1035,6 +1852,15 @@ namespace klang {
 			return *this;
 		}
 
+		template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+		Control& operator=(TYPE input) { return set(static_cast<float>(input)); }
+		template<typename TYPE, std::enable_if_t<!std::is_arithmetic_v<std::decay_t<TYPE>> &&
+			!std::is_same_v<std::decay_t<TYPE>, Control> && std::is_convertible_v<TYPE&&, signal>, int> = 0>
+		Control& operator=(TYPE&& input) {
+			const signal sample = std::forward<TYPE>(input);
+			return set(sample);
+		}
+
 		Control& operator+=(float x) { value += x; return *this; }
 		Control& operator*=(float x) { value *= x; return *this; }
 		Control& operator-=(float x) { value -= x; return *this; }
@@ -1045,21 +1871,19 @@ namespace klang {
 		//float operator-(float x) const { return value - x; }
 		//float operator/(float x) const { return value / x; }
 
-		template<typename TYPE> signal operator+(const Control& x) const { return value + (signal)x; }
-		template<typename TYPE> signal operator*(const Control& x) const { return value * (signal)x; }
-		template<typename TYPE> signal operator-(const Control& x) const { return value - (signal)x; }
-		template<typename TYPE> signal operator/(const Control& x) const { return value / (signal)x; }
+		template<typename TYPE> signal operator+(const Control& x) const { return value + x.operator klang::signal(); }
+		template<typename TYPE> signal operator*(const Control& x) const { return value * x.operator klang::signal(); }
+		template<typename TYPE> signal operator-(const Control& x) const { return value - x.operator klang::signal(); }
+		template<typename TYPE> signal operator/(const Control& x) const { return value / x.operator klang::signal(); }
 
-		template<typename TYPE> float operator+(TYPE x) const { return value + (signal)x; }
-		template<typename TYPE> float operator*(TYPE x) const { return value * (signal)x; }
-		template<typename TYPE> float operator-(TYPE x) const { return value - (signal)x; }
-		template<typename TYPE> float operator/(TYPE x) const { return value / (signal)x; }
+		template<typename TYPE> float operator+(TYPE& x) const { return value + (signal)x; }
+		template<typename TYPE> float operator*(TYPE& x) const { return value * (signal)x; }
+		template<typename TYPE> float operator-(TYPE& x) const { return value - (signal)x; }
+		template<typename TYPE> float operator/(TYPE& x) const { return value / (signal)x; }
 
-		template<typename TYPE> Control& operator<<(TYPE& in) { value = in; return *this; }		// assign to control with processing
-		template<typename TYPE> Control& operator<<(const TYPE& in) { value = in; return *this; }	// assign to control without/after processing
-
-		template<typename TYPE> TYPE& operator>>(TYPE& in) { return value >> in; }					// stream control to signal/object (allows processing)
-		template<typename TYPE> const TYPE& operator>>(const TYPE& in) { return value >> in; }		// stream control to signal/object (no processing)
+		Control& operator<<(const signal& input) { return operator=(input); }
+		template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+		Control& operator<<(TYPE input) { return operator=(input); }
 	};
 
 	const Control::Size Automatic = { -1, -1, -1, -1 };
@@ -1093,8 +1917,17 @@ namespace klang {
 		operator float() const { return control->value; }
 		signal smooth() { return control->smooth(); }
 
-		template<typename TYPE> Control& operator<<(TYPE& in) { control->value = in; return *control; }		// assign to control with processing
-		template<typename TYPE> Control& operator<<(const TYPE& in) { control->value = in; return *control; }	// assign to control without/after processing
+		ControlMap& operator=(Control& mapped) { control = &mapped; return *this; }
+		template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+		ControlMap& operator=(TYPE input) { *control = input; return *this; }
+		template<typename TYPE, std::enable_if_t<!std::is_arithmetic_v<std::decay_t<TYPE>> &&
+			!std::is_same_v<std::decay_t<TYPE>, ControlMap> && !std::is_same_v<std::decay_t<TYPE>, Control> &&
+			std::is_convertible_v<TYPE&&, signal>, int> = 0>
+		ControlMap& operator=(TYPE&& input) { *control = std::forward<TYPE>(input); return *this; }
+
+		Control& operator<<(const signal& input) { return *control << input; }
+		template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+		Control& operator<<(TYPE input) { return *control << input; }
 	};
 
 	IS_SIMPLE_TYPE(Control);
@@ -1180,6 +2013,8 @@ namespace klang {
 		Group(Control::Size size, Controls... ctrls) : name(""), size(size), controls{ std::forward<Controls>(ctrls)... } {}
 	};
 
+	struct Preset;
+
 	/// Plugin UI controls
 	struct Controls : Array<Control, 128>
 	{
@@ -1235,6 +2070,22 @@ namespace klang {
 			groups.add(g);
 		}
 
+		template<typename... ARGS>
+		void set(ARGS... args) {
+			static_assert((std::is_arithmetic<ARGS>::value && ...), "Control::set() only accepts scalar arguments");
+
+			const int nbParams = sizeof...(args);
+			const float params[] = { static_cast<float>(args)... };
+
+			for(unsigned int p = 0; p < nbParams && p < count; p++)
+				operator[](p).set(params[p]);
+		}
+
+		/// Apply a preset's values, clamped to the corresponding control ranges.
+		void set(const Preset& preset);
+		/// Shorthand for set(preset).
+		Controls& operator=(const Preset& preset);
+
 		//float& operator[](int index) { return items[index].value; }
 		//signal operator[](int index) const { return items[index].value; }
 
@@ -1249,6 +2100,16 @@ namespace klang {
 		Caption name = { 0 };
 		Values values;
 	};
+
+	inline void Controls::set(const Preset& preset) {
+		for (unsigned int p = 0; p < preset.values.count && p < count; p++)
+			operator[](p).set(preset.values[p]);
+	}
+
+	inline Controls& Controls::operator=(const Preset& preset) {
+		set(preset);
+		return *this;
+	}
 
 	//template<typename... Settings>
 	//static Program Preset(const char* name, const Settings... settings)
@@ -1323,15 +2184,25 @@ namespace klang {
 			set(initial);
 		}
 
-		buffer(int size, float initial = 0)
+		buffer(int size = 1, float initial = 0)
 			: mask(capacity(size) - 1), owned(true), samples(new float[capacity(size)]), size(size) {
 			rewind();
 			set(initial);
 		}
 
+		buffer(const buffer& buf) : mask(buf.mask), owned(false), samples(buf.samples), size(buf.size) {
+			rewind();
+		}
+
 		virtual ~buffer() {
 			if (owned)
 				delete[] samples;
+		}
+
+		void attach(const buffer& buffer, int size = 0) {
+			samples = buffer.samples;
+			rewind();
+			end = (signal*)&samples[size];
 		}
 
 		void rewind(int offset = 0) {
@@ -1362,6 +2233,10 @@ namespace klang {
 		}
 
 		signal& operator[](int offset) {
+			return *(signal*)&samples[offset & mask]; // owned array can't write beyond allocation
+		}
+
+		signal& operator[](unsigned int offset) {
 			return *(signal*)&samples[offset & mask]; // owned array can't write beyond allocation
 		}
 
@@ -1418,8 +2293,7 @@ namespace klang {
 		}
 
 		buffer& operator=(const buffer& in) {
-			//assert(size == in.size);
-			memcpy(samples, in.samples, size * sizeof(float));
+			memcpy(samples, in.samples, min(size, in.size) * sizeof(float));
 			return *this;
 		}
 
@@ -1428,8 +2302,177 @@ namespace klang {
 			return *this;
 		}
 
+		float* data() { return samples; }
 		const float* data() const { return samples; }
+
+		float level() const {
+			float level = 0.f;
+			for (int s = 0; s < size; s++)
+				level += FABS(samples[s]);
+			return level / size;
+		}
+
+		float rms() const {
+			float rms = 0.f;
+			for (int s = 0; s < size; s++)
+				rms += samples[s] * samples[s];
+			return sqrtf(rms / size);
+		}
 	};
+
+	namespace variable {
+		class buffer {
+			std::unique_ptr<klang::buffer> ptr;
+		public:
+			int size = 0;
+
+			buffer(int size = 1, float initial = 0.f) : size(size), ptr(new klang::buffer(size, initial)) {}
+			buffer(const klang::buffer& buffer) : size(buffer.size), ptr(new klang::buffer(buffer.size)) { *ptr = buffer; };
+			//buffer(klang::buffer* buffer) : size(buffer->size), ptr(new klang::buffer(buffer->data(), buffer->size)) { };
+			virtual ~buffer() { ptr.reset(); };
+
+			operator klang::buffer& () { return *ptr; }
+			operator const klang::buffer& () const { return *ptr; }
+			void resize(int size) {
+				if (size != ptr->size)
+					ptr = std::unique_ptr<klang::buffer>(new klang::buffer(buffer::size = size));
+			}
+
+			void rewind(int offset = 0) { ptr->rewind(offset); }
+			void clear() { ptr->clear(); }
+			void clear(int size) { ptr->clear(size); }
+			int offset() const { return ptr->offset(); }
+			void set(float value = 0) { ptr->set(value); }
+			signal& operator[](int offset) { return ptr->operator[](offset); }
+			signal& operator[](unsigned int offset) { return ptr->operator[](offset); }
+			signal operator[](float offset) { return ptr->operator[](offset); }
+			signal operator[](float offset) const { return ptr->operator[](offset); }
+			const signal& operator[](int index) const { return ptr->operator[](index); }
+			operator signal& () { return ptr->operator signal & (); }
+			operator const signal& () const { return ptr->operator const signal & (); }
+			explicit operator double() const { return ptr->operator double(); }
+			bool finished() const { return ptr->finished(); }
+			signal& operator++(int) { return ptr->operator++(1); }
+			//signal& operator=(const signal& in) { return ptr->operator=(in); }
+			//signal& operator+=(const signal& in) { return ptr->operator+=(in); }
+			//signal& operator*=(const signal& in) { return ptr->operator*=(in); }
+
+			variable::buffer& operator=(const klang::buffer& in) {
+				resize(in.size); *ptr = in; return *this;
+			}
+
+			variable::buffer& operator=(const variable::buffer& in) {
+				resize(in.size); *ptr = *in.ptr; return *this;
+			}
+
+			float* data() { return ptr->data(); }
+			const float* data() const { return ptr->data(); }
+
+			float level() const { return ptr->level(); }
+			float rms() const { return ptr->rms(); }
+		};
+	}
+
+	namespace interleaved {
+		/** Interleaved frames: L,R,L,R for two channels. Sizes and offsets are frames.
+		 * A float-pointer constructor borrows host storage; the size constructor owns
+		 * storage rounded up to a power of two. Copies borrow the same storage and
+		 * rewind; the original owner must outlive them. Assignment copies audio.
+		 * Owned integer indexing wraps at allocated frame capacity, like mono buffer.
+		 * Example: interleaved::buffer<2> audio(hostSamples, frameCount);
+		 */
+		template<int CHANNELS = 2>
+		class buffer {
+		public:
+			using signal = signals<CHANNELS>;
+			static_assert(CHANNELS > 0);
+			static_assert(std::is_trivially_copyable_v<signal>);
+			static_assert(std::is_standard_layout_v<signal>);
+			static_assert(sizeof(signal) == sizeof(float) * CHANNELS);
+			static_assert(alignof(signal) == alignof(float));
+		private:
+			static unsigned int capacity(unsigned int size) {
+				if (size == 0) return 1;
+				--size;
+				size |= size >> 1;
+				size |= size >> 2;
+				size |= size >> 4;
+				size |= size >> 8;
+				size |= size >> 16;
+				return size + 1;
+			}
+			const unsigned int mask = 0xFFFFFFFF;
+			const bool owned = false;
+			float* samples;
+			signal* ptr;
+			signal* end;
+		public:
+			const int size;
+			buffer(float* samples, int size) : samples(samples), size(size) {
+				assert(size >= 0 && (samples || size == 0));
+				rewind();
+			}
+			buffer(float* samples, int size, float initial) : buffer(samples, size) {
+				set(initial);
+			}
+			buffer(int size = 1, float initial = 0)
+				: mask(capacity(size) - 1), owned(true),
+				  samples(reinterpret_cast<float*>(new signal[capacity(size)])), size(size) {
+				assert(size >= 0);
+				rewind();
+				set(initial);
+			}
+			buffer(const buffer& other)
+				: mask(other.mask), samples(other.samples), size(other.size) { rewind(); }
+			~buffer() {
+				if (owned) delete[] reinterpret_cast<signal*>(samples);
+			}
+			void rewind(int offset = 0) {
+				assert(offset >= 0 && offset <= size);
+				ptr = samples ? reinterpret_cast<signal*>(samples) + offset : nullptr;
+				end = samples ? reinterpret_cast<signal*>(samples) + size : nullptr;
+			}
+			int offset() const { return samples ? int(ptr - reinterpret_cast<signal*>(samples)) : 0; }
+			void clear() { clear(size); }
+			void clear(int count) {
+				assert(count >= 0);
+				if (count > 0 && size > 0) std::memset(samples, 0, sizeof(signal) * std::min(count, size));
+			}
+			void set(float value = 0) {
+				if (value == 0) clear();
+				else for (size_t i = 0; i < size_t(size) * CHANNELS; ++i) samples[i] = value;
+			}
+			signal& operator[](int index) {
+				return reinterpret_cast<signal*>(samples)[static_cast<unsigned int>(index) & mask];
+			}
+			const signal& operator[](int index) const {
+				return reinterpret_cast<const signal*>(samples)[static_cast<unsigned int>(index) & mask];
+			}
+			signal operator[](float offset) const {
+				const float whole = std::floor(offset);
+				const float fraction = offset - whole;
+				const int i = int(whole), j = i == size - 1 ? 0 : i + 1;
+				return (*this)[i] * (1.f - fraction) + (*this)[j] * fraction;
+			}
+			signal operator[](float offset) { return static_cast<const buffer&>(*this)[offset]; }
+			operator signal& () { return *ptr; }
+			operator const signal& () const { return *ptr; }
+			bool finished() const { return ptr == end; }
+			signal& operator++(int) { return *ptr++; }
+			signal& operator=(const signal& value) { return *ptr = value; }
+			signal& operator+=(const signal& value) { return *ptr += value; }
+			signal& operator*=(const signal& value) { return *ptr *= value; }
+			buffer& operator=(const buffer& other) {
+				if (size > 0 && other.size > 0)
+					std::memmove(samples, other.samples, std::min(size, other.size) * sizeof(signal));
+				return *this;
+			}
+			buffer& operator<<(const signal& value) { *ptr = value; return *this; }
+			float* data() { return samples; }
+			const float* data() const { return samples; }
+		};
+	}
+
 
 	struct Graph;
 	struct GraphPtr;
@@ -1447,8 +2490,8 @@ namespace klang {
 			virtual const SIGNAL& input() const { return in; }
 
 			// feedback input (include pre-processing, if any)
-			virtual void operator<<(const SIGNAL& source) { in = source; input(); }
-			virtual void input(const SIGNAL& source) { in = source; input(); }
+			virtual void operator<<(const SIGNAL& source) { in = source; this->input(); }
+			virtual void input(const SIGNAL& source) { in = source; this->input(); }
 
 		protected:
 			// preprocess input (default: none)
@@ -1465,17 +2508,17 @@ namespace klang {
 
 			// pass output to destination (with processing)
 			template<typename TYPE>
-			TYPE& operator>>(TYPE& destination) { process(); return destination = out; }
+			TYPE& operator>>(TYPE& destination) { this->process(); return destination = out; }
 
 			// returns output (with processing)
-			virtual operator const SIGNAL& () { process(); return out; } // return processed output
+			virtual operator const SIGNAL& () { this->process(); return out; } // return processed output
 			virtual operator const SIGNAL& () const { return out; } // return last output
 
 			// arithmetic operations produce copies
-			template<typename TYPE> SIGNAL operator+(TYPE& other) { process(); return out + SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator*(TYPE& other) { process(); return out * SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator-(TYPE& other) { process(); return out - SIGNAL(other); }
-			template<typename TYPE> SIGNAL operator/(TYPE& other) { process(); return out / SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator+(TYPE& other) { this->process(); return out + SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator*(TYPE& other) { this->process(); return out * SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator-(TYPE& other) { this->process(); return out - SIGNAL(other); }
+			template<typename TYPE> SIGNAL operator/(TYPE& other) { this->process(); return out / SIGNAL(other); }
 
 			void reset() { out = 0; }
 
@@ -1495,10 +2538,22 @@ namespace klang {
 		template<typename SIGNAL> inline SIGNAL operator-(float other, Output<SIGNAL>& output) { return SIGNAL(other) - SIGNAL(output); }
 		template<typename SIGNAL> inline SIGNAL operator/(float other, Output<SIGNAL>& output) { return SIGNAL(other) / SIGNAL(output); }
 
-		template<typename SIGNAL> inline SIGNAL operator+(Output<SIGNAL>& output, float other) { return SIGNAL(output) + other; }
-		template<typename SIGNAL> inline SIGNAL operator*(Output<SIGNAL>& output, float other) { return SIGNAL(output) * other; }
-		template<typename SIGNAL> inline SIGNAL operator-(Output<SIGNAL>& output, float other) { return SIGNAL(output) - other; }
-		template<typename SIGNAL> inline SIGNAL operator/(Output<SIGNAL>& output, float other) { return SIGNAL(output) / other; }
+		// Supply scalar temporaries without competing with lvalue member arithmetic
+		// or Function's existing implicit float conversion. Keep the float DSP path.
+		template<typename OBJECT> using OutputSignal = std::decay_t<decltype(std::declval<OBJECT&>().out)>;
+		template<typename OBJECT, typename SCALAR> using ScalarOutput = std::enable_if_t<
+			std::is_arithmetic_v<SCALAR> && !std::is_const_v<OBJECT> &&
+			std::is_base_of_v<Output<OutputSignal<OBJECT>>, OBJECT> &&
+			!std::is_convertible_v<OBJECT&, float>, OutputSignal<OBJECT>>;
+
+		template<typename OBJECT, typename SCALAR>
+		inline ScalarOutput<OBJECT, SCALAR> operator+(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) + float(other); }
+		template<typename OBJECT, typename SCALAR>
+		inline ScalarOutput<OBJECT, SCALAR> operator*(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) * float(other); }
+		template<typename OBJECT, typename SCALAR>
+		inline ScalarOutput<OBJECT, SCALAR> operator-(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) - float(other); }
+		template<typename OBJECT, typename SCALAR>
+		inline ScalarOutput<OBJECT, SCALAR> operator/(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) / float(other); }
 
 		//inline signal operator+(Output& other, Output& output) { return signal(output) + signal(other); }
 		//inline signal operator*(Output& other, Output& output) { return signal(output) * signal(other); }
@@ -1512,14 +2567,14 @@ namespace klang {
 
 			// inline parameter(s) support
 			template<typename... params>
-			Output<SIGNAL>& operator()(params... p) {
-				set(p...); return *this;
+			Output<SIGNAL>& operator()(params&&... p) {
+				set(std::forward<params>(p)...); return *this;
 			}
 
 			using Output<SIGNAL>::operator>>;
 			using Output<SIGNAL>::process;
-			operator const SIGNAL& () override { process(); return out; } // return processed output		
-			operator const SIGNAL& () const override { return out; } // return last output		
+			operator const SIGNAL& () override { this->process(); return out; } // return processed output
+			operator const SIGNAL& () const override { return out; } // return last output
 
 		protected:
 			// overrideable parameter setting (up to 8 parameters)
@@ -1552,7 +2607,7 @@ namespace klang {
 			virtual ~Modifier() {}
 
 			// signal processing (input-output)
-			operator const SIGNAL& () override { process(); return out; } // return processed output
+			operator const SIGNAL& () override { this->process(); return out; } // return processed output
 			operator const SIGNAL& () const override { return out; } // return last output
 
 			using Input<SIGNAL>::input;
@@ -1560,8 +2615,8 @@ namespace klang {
 
 			// inline parameter(s) support
 			template<typename... params>
-			Modifier<SIGNAL>& operator()(params... p) {
-				set(p...); return *this;
+			Modifier<SIGNAL>& operator()(params&&... p) {
+				set(std::forward<params>(p)...); return *this;
 			}
 		protected:
 			// overrideable parameter setting (up to 8 parameters)
@@ -1596,7 +2651,7 @@ namespace klang {
 			operator SIGNAL() {
 				if (function)
 					return out = evaluate();
-				process();
+				this->process();
 				return out;
 			};
 			operator param() {
@@ -1687,7 +2742,7 @@ namespace klang {
 
 				// Calling: full set of arguments supplied (overwrite live input)
 				if constexpr (ARGS == sizeof...(FuncArgs)) {
-					in = first(args...);
+					in = float(first(args...));
 					inputs = std::tuple<Args...>(args...);
 					return *this;
 
@@ -2159,6 +3214,7 @@ namespace klang {
 	struct Bank : public GeneratorOrModifier<TYPE, signals<COUNT>> {
 		using GeneratorOrModifier<TYPE, signals<COUNT>>::in;
 		using GeneratorOrModifier<TYPE, signals<COUNT>>::out;
+		using GeneratorOrModifier<TYPE, signals<COUNT>>::operator>>;
 
 		TYPE items[COUNT];
 
@@ -2179,6 +3235,18 @@ namespace klang {
 		void process() override {
 			for (int n = 0; n < COUNT; n++)
 				items[n] >> out[n];
+		}
+
+		/// Return the sum of the cached parallel outputs.
+		signal sum() const { return out.sum(); }
+
+		/// Return the Bank's default mono reduction: the sum of its parallel outputs.
+		signal mono() const { return sum(); }
+
+		/// Process every item once and route their summed output to mono.
+		signal& operator>>(signal& destination) {
+			process();
+			return destination = mono();
 		}
 	};
 
@@ -2213,59 +3281,59 @@ namespace klang {
 	struct GraphPtr {
 		std::unique_ptr<Graph> ptr;
 
-		void check() {
+		void init() {
 			if (ptr.get() == nullptr)
 				ptr = std::make_unique<Graph>();
 		}
 
-		Graph* operator->() { check(); return (klang::Graph*)ptr.get(); }
-		operator Graph* () { check(); return (klang::Graph*)ptr.get(); }
-		operator Graph& () { check(); return *(klang::Graph*)ptr.get(); }
+		Graph* operator->() { init(); return (klang::Graph*)ptr.get(); }
+		operator Graph* () { init(); return (klang::Graph*)ptr.get(); }
+		operator Graph& () { init(); return *(klang::Graph*)ptr.get(); }
 
-		void clear() { check(); ptr->clear(); }
+		void clear() { init(); ptr->clear(); }
 		bool isActive() const { return ptr ? ptr->isActive() : false; }
 
-		Graph& operator()(double min, double max) { check(); return (Graph&)ptr->operator()(min, max); }
+		Graph& operator()(double min, double max) { init(); return (Graph&)ptr->operator()(min, max); }
 
-		Graph::Series& operator[](int index) { check(); return ptr->operator[](index); }
+		Graph::Series& operator[](int index) { init(); return ptr->operator[](index); }
 		const Graph::Series& operator[](int index) const { static const Graph::Series none = Graph::Series(); return ptr ? ptr->operator[](index) : none; }
 
-		Graph& operator()(double x_min, double x_max, double y_min, double y_max) { check(); return (Graph&)ptr->operator()(x_min, x_max, y_min, y_max); }
+		Graph& operator()(double x_min, double x_max, double y_min, double y_max) { init(); return (Graph&)ptr->operator()(x_min, x_max, y_min, y_max); }
 
-		operator Graph::Series& () { check(); return ptr->operator Graph::Series & (); }
+		operator Graph::Series& () { init(); return ptr->operator Graph::Series & (); }
 
 		template<typename SIGNAL, typename... Args>
-		void plot(Generic::Function<SIGNAL, Args...>& function) { check(); ((Graph*)(ptr.get()))->plot(function); }
+		void plot(Generic::Function<SIGNAL, Args...>& function) { init(); ((Graph*)(ptr.get()))->plot(function); }
 
 		template<typename TYPE>
-		void plot(TYPE(*function)(TYPE)) { check(); ((Graph*)(ptr.get()))->plot(function); }
+		void plot(TYPE(*function)(TYPE)) { init(); ((Graph*)(ptr.get()))->plot(function); }
 
 		template<typename FUNCTION, typename... VALUES>
-		void plot(FUNCTION f, VALUES... values) { check(); ((Graph*)(ptr.get()))->plot(f, values...); }
+		void plot(FUNCTION f, VALUES... values) { init(); ((Graph*)(ptr.get()))->plot(f, values...); }
 
-		template<typename TYPE> void add(TYPE y) { check(); ptr->add(y); }
-		void add(const Graph::Point pt) { check(); ptr->add(pt); }
+		template<typename TYPE> void add(TYPE y) { init(); ptr->add(y); }
+		void add(const Graph::Point pt) { init(); ptr->add(pt); }
 
-		template<typename TYPE> Graph& operator+=(TYPE y) { check(); return ptr->operator+=(y); }
-		Graph& operator+=(const Graph::Point pt) { check(); return (Graph&)ptr->operator+=(pt); }
+		template<typename TYPE> Graph& operator+=(TYPE y) { init(); return ptr->operator+=(y); }
+		Graph& operator+=(const Graph::Point pt) { init(); return (Graph&)ptr->operator+=(pt); }
 
-		template<typename TYPE> Graph& operator=(TYPE(*function)(TYPE)) { check(); return (Graph&)ptr->operator=(function); }
+		template<typename TYPE> Graph& operator=(TYPE(*function)(TYPE)) { init(); return (Graph&)ptr->operator=(function); }
 
-		Graph& operator=(std::initializer_list<Graph::Point> values) { check(); return (Graph&)ptr->operator=(values); }
-		Graph& operator+=(std::initializer_list<Graph::Point> values) { check(); return (Graph&)ptr->operator+=(values); }
+		Graph& operator=(std::initializer_list<Graph::Point> values) { init(); return (Graph&)ptr->operator=(values); }
+		Graph& operator+=(std::initializer_list<Graph::Point> values) { init(); return (Graph&)ptr->operator+=(values); }
 
 		template<typename... Args> Graph& operator<<(Generic::Function<Args...>& function) { plot(function.with()); return *this; }
 		template<typename TYPE> Graph& operator<<(TYPE& in) { add(in); return *this; } // with processing
 		template<typename TYPE> Graph& operator<<(const TYPE& in) { add(in); return *this; } // without/after processing
 
 		const Graph::Axes& getAxes() const { static const Graph::Axes none; return ptr ? ptr->getAxes() : none; }
-		void getAxes(Graph::Axes& axes) { check(); ptr->getAxes(axes); }
+		void getAxes(Graph::Axes& axes) { init(); ptr->getAxes(axes); }
 
-		const Graph::Data& getData() { check(); return ptr->getData(); }
+		const Graph::Data& getData() { init(); return ptr->getData(); }
 		bool isDirty() const { return ptr ? ptr->isDirty() : false; }
 		void setDirty(bool dirty) { if (ptr) ptr->setDirty(dirty); }
 
-		void truncate(unsigned int count) { check(); ptr->truncate(count); }
+		void truncate(unsigned int count) { init(); ptr->truncate(count); }
 	};
 	/// @endcond
 
@@ -2286,6 +3354,11 @@ namespace klang {
 		return graph;
 	}
 
+	inline static GraphPtr& operator>>(UnaryFunction& function, klang::GraphPtr& graph) {
+		graph->plot(static_cast<float(*)(float)>(function));
+		return graph;
+	}
+
 	template<typename TYPE>
 	static GraphPtr& operator>>(TYPE(*function)(TYPE), klang::GraphPtr& graph) {
 		graph->plot(function);
@@ -2295,6 +3368,11 @@ namespace klang {
 	template<typename SIGNAL, typename... Args>
 	inline Graph& Generic::Function<SIGNAL, Args...>::operator>>(klang::Graph& graph) {
 		graph.plot(*this);
+		return graph;
+	}
+
+	inline static Graph& operator>>(UnaryFunction& function, Graph& graph) {
+		graph.plot(static_cast<float(*)(float)>(function));
 		return graph;
 	}
 
@@ -2316,17 +3394,198 @@ namespace klang {
 		return *this;
 	}
 
-	/// Square root function (audio object)
-	inline static Function<float> sqrt(SQRTF);
-	/// Absolute/rectify function (audio object)
-	inline static Function<float> abs(FABS);
-	/// Square function (audio object)
-	inline static Function<float> sqr([](float x) -> float { return x * x; });
-	/// Cube function (audio object)
-	inline static Function<float> cube([](float x) -> float { return x * x * x; });
+	// Extend common standard unary maths overload sets for Klang wrapper types.
+#define KLANG_UNARY_MATH(function) \
+	using std::function; \
+	inline signal function(signal input) { return std::function(input.value); } \
+	inline float function(const Control& input) { return float(std::function(float(input))); } \
+	inline float function(const ControlMap& input) { return float(std::function(float(input))); }
 
-#define sqrt klang::sqrt // avoid conflict with std::sqrt
-#define abs klang::abs   // avoid conflict with std::abs
+	KLANG_UNARY_MATH(abs)
+	KLANG_UNARY_MATH(sqrt)
+	KLANG_UNARY_MATH(cbrt)
+	KLANG_UNARY_MATH(sin)
+	KLANG_UNARY_MATH(cos)
+	KLANG_UNARY_MATH(tan)
+	KLANG_UNARY_MATH(asin)
+	KLANG_UNARY_MATH(acos)
+	KLANG_UNARY_MATH(atan)
+	KLANG_UNARY_MATH(sinh)
+	KLANG_UNARY_MATH(cosh)
+	KLANG_UNARY_MATH(tanh)
+	KLANG_UNARY_MATH(asinh)
+	KLANG_UNARY_MATH(acosh)
+	KLANG_UNARY_MATH(atanh)
+	KLANG_UNARY_MATH(exp)
+	KLANG_UNARY_MATH(exp2)
+	KLANG_UNARY_MATH(expm1)
+	KLANG_UNARY_MATH(log)
+	KLANG_UNARY_MATH(log2)
+	KLANG_UNARY_MATH(log10)
+	KLANG_UNARY_MATH(log1p)
+	KLANG_UNARY_MATH(floor)
+	KLANG_UNARY_MATH(ceil)
+	KLANG_UNARY_MATH(trunc)
+	KLANG_UNARY_MATH(round)
+	KLANG_UNARY_MATH(erf)
+	KLANG_UNARY_MATH(erfc)
+
+#undef KLANG_UNARY_MATH
+
+	namespace detail {
+		/// A stateless binary maths operation with its right argument bound for signal flow.
+		template<class OPERATION>
+		struct BinaryMath {
+			float right;
+		};
+
+		/// A stateless ternary maths operation with its final two arguments bound for signal flow.
+		template<class OPERATION>
+		struct TernaryMath {
+			float middle, right;
+		};
+
+		template<class OPERATION>
+		inline signal operator>>(signal left, const BinaryMath<OPERATION>& stage) {
+			return OPERATION{}(float(left), stage.right);
+		}
+
+		template<class OPERATION>
+		inline signal operator>>(signal left, const TernaryMath<OPERATION>& stage) {
+			return OPERATION{}(float(left), stage.middle, stage.right);
+		}
+	}
+
+	// Extend standard binary maths with direct signal overloads and function(right) flow stages.
+#define KLANG_BINARY_MATH(function) \
+	namespace detail { \
+		struct function##_operation { \
+			float operator()(float left, float right) const { \
+				return float(std::function(left, right)); \
+			} \
+		}; \
+	} \
+	template<typename RIGHT, std::enable_if_t<std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline detail::BinaryMath<detail::function##_operation> function(RIGHT right) { \
+		return {float(right)}; \
+	} \
+	inline signal function(signal left, signal right) { \
+		return detail::function##_operation{}(float(left), float(right)); \
+	} \
+	template<typename RIGHT, std::enable_if_t<std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline signal function(signal left, RIGHT right) { \
+		return detail::function##_operation{}(float(left), float(right)); \
+	} \
+	template<typename LEFT, std::enable_if_t<std::is_arithmetic_v<LEFT>, int> = 0> \
+	inline signal function(LEFT left, signal right) { \
+		return detail::function##_operation{}(float(left), float(right)); \
+	}
+
+	// Keep ordinary scalar calls visible after adding the Klang overloads below.
+	using std::pow;
+	using std::atan2;
+	using std::hypot;
+	using std::fmod;
+	using std::remainder;
+	using std::copysign;
+	using std::fdim;
+	using std::clamp;
+
+	// Extend standard ternary maths with direct signal overloads and function(middle,right) flow stages.
+#define KLANG_TERNARY_MATH(function) \
+	namespace detail { \
+		struct function##_operation { \
+			float operator()(float left, float middle, float right) const { \
+				return float(std::function(left, middle, right)); \
+			} \
+		}; \
+	} \
+	template<typename MIDDLE, typename RIGHT, \
+		std::enable_if_t<std::is_arithmetic_v<MIDDLE> && std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline detail::TernaryMath<detail::function##_operation> function(MIDDLE middle, RIGHT right) { \
+		return {float(middle), float(right)}; \
+	} \
+	inline signal function(signal left, signal middle, signal right) { \
+		return detail::function##_operation{}(float(left), float(middle), float(right)); \
+	} \
+	template<typename MIDDLE, typename RIGHT, \
+		std::enable_if_t<std::is_arithmetic_v<MIDDLE> && std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline signal function(signal left, MIDDLE middle, RIGHT right) { \
+		return detail::function##_operation{}(float(left), float(middle), float(right)); \
+	}
+
+	KLANG_BINARY_MATH(min)
+	KLANG_BINARY_MATH(max)
+	KLANG_BINARY_MATH(pow)
+	KLANG_BINARY_MATH(atan2)
+	KLANG_BINARY_MATH(hypot)
+	KLANG_BINARY_MATH(fmod)
+	KLANG_BINARY_MATH(remainder)
+	KLANG_BINARY_MATH(copysign)
+	KLANG_BINARY_MATH(fdim)
+	KLANG_TERNARY_MATH(clamp)
+
+	/// Alias clamp as clip for signal-flow terminology.
+	template<typename... ARGS>
+	inline auto clip(ARGS&&... args) -> decltype(clamp(std::forward<ARGS>(args)...)) {
+		return clamp(std::forward<ARGS>(args)...);
+	}
+
+	namespace detail {
+		struct mod_operation {
+			float operator()(float left, float right) const {
+				return std::fmod(left, right);
+			}
+		};
+	}
+
+	/// Return the C++ remainder for integers and the floating-point remainder otherwise.
+	template<typename LEFT, typename RIGHT, std::enable_if_t<
+		std::is_arithmetic_v<LEFT> && std::is_arithmetic_v<RIGHT>, int> = 0>
+	inline auto mod(LEFT left, RIGHT right) {
+		if constexpr (std::is_integral_v<LEFT> && std::is_integral_v<RIGHT>)
+			return left % right;
+		else {
+			using Float = std::conditional_t<
+				std::is_same_v<LEFT, long double> || std::is_same_v<RIGHT, long double>, long double,
+				std::conditional_t<std::is_same_v<LEFT, double> || std::is_same_v<RIGHT, double>, double, float>>;
+			return std::fmod(Float(left), Float(right));
+		}
+	}
+
+	template<typename RIGHT, std::enable_if_t<std::is_arithmetic_v<RIGHT>, int> = 0>
+	inline detail::BinaryMath<detail::mod_operation> mod(RIGHT right) {
+		return {float(right)};
+	}
+
+	inline signal mod(signal left, signal right) {
+		return detail::mod_operation{}(float(left), float(right));
+	}
+
+	template<typename RIGHT, std::enable_if_t<std::is_arithmetic_v<RIGHT>, int> = 0>
+	inline signal mod(signal left, RIGHT right) {
+		return detail::mod_operation{}(float(left), float(right));
+	}
+
+	template<typename LEFT, std::enable_if_t<std::is_arithmetic_v<LEFT>, int> = 0>
+	inline signal mod(LEFT left, signal right) {
+		return detail::mod_operation{}(float(left), float(right));
+	}
+
+#undef KLANG_BINARY_MATH
+#undef KLANG_TERNARY_MATH
+
+	/// Stateless square and cube functions preserve Klang signals in audio expressions.
+	inline signal sqr(signal input) { return input * input; }
+	inline signal cube(signal input) { return input * input * input; }
+	template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+	inline TYPE sqr(TYPE input) { return input * input; }
+	template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+	inline TYPE cube(TYPE input) { return input * input * input; }
+	inline float sqr(const Control& input) { const float value = float(input); return value * value; }
+	inline float cube(const Control& input) { const float value = float(input); return value * value * value; }
+	inline float sqr(const ControlMap& input) { const float value = float(input); return value * value; }
+	inline float cube(const ControlMap& input) { const float value = float(input); return value * value * value; }
 
 	/// Debug text output
 	struct Console : public Text<16384> {
@@ -2383,7 +3642,11 @@ namespace klang {
 
 	inline THREAD_LOCAL Text<16384> Console::last;
 
+#if HAS_KLANG_DEBUG
 #define PROFILE(func, ...) debug.print("%-16s = %fns\n", #func "(" #__VA_ARGS__ ")", debug.profile(1000, func, __VA_ARGS__));
+#else
+#define PROFILE(func, ...) ((void)0);
+#endif
 
 	/// The Klang debug interface
 	struct Debug : Input {
@@ -2392,7 +3655,12 @@ namespace klang {
 		struct Buffer : private buffer {
 			using buffer::clear;
 			using buffer::rewind;
+#if HAS_KLANG_DEBUG
 			using buffer::operator++;
+#else
+			// Keep direct cursor calls valid without advancing beyond storage.
+			signal& operator++(int) { return *ptr; }
+#endif
 			using buffer::operator signal&;
 
 			Buffer() : buffer(16384) {}
@@ -2418,6 +3686,7 @@ namespace klang {
 			int used = 0;
 
 			const float* get() {
+#if HAS_KLANG_DEBUG
 				if (active) {
 					active = false;
 					return data();
@@ -2425,28 +3694,49 @@ namespace klang {
 				else {
 					return nullptr;
 				}
+#else
+				return nullptr;
+#endif
 			}
 
 			Buffer& operator+=(const signal in) {
+#if HAS_KLANG_DEBUG
 				active = true;
 				buffer::operator+=(in);
 				return *this;
+#else
+				return *this;
+#endif
 			}
 
 			template<typename TYPE>
 			Buffer& operator+=(TYPE& in) {
+#if HAS_KLANG_DEBUG
 				active = true;
 				buffer::operator+=(in);
 				return *this;
+#else
+				return *this;
+#endif
 			}
 
 			signal& operator>>(signal& destination) const {
+#if HAS_KLANG_DEBUG
 				destination << *ptr;
 				return destination;
+#else
+				destination = 0;
+				return destination;
+#endif
 			}
 
 			operator const signal& () const {
+#if HAS_KLANG_DEBUG
 				return *ptr;
+#else
+				static const signal silence = 0;
+				return silence;
+#endif
 			}
 		};
 
@@ -2457,6 +3747,7 @@ namespace klang {
 
 		template <typename Func, typename... Args>
 		inline static double profile(Func func, Args... args) {
+#if HAS_KLANG_DEBUG
 			using namespace std::chrono;
 
 			auto start = high_resolution_clock::now();
@@ -2465,20 +3756,28 @@ namespace klang {
 
 			auto duration = duration_cast<nanoseconds>(end - start).count();
 			return (double)duration;
+#else
+			return 0;
+#endif
 		}
 
 		template <typename Func, typename... Args>
 		inline static double profile(int times, Func func, Args... args) {
+#if HAS_KLANG_DEBUG
 			double sum = 0;
 			while (times--) {
 				sum += profile(func, args...);
 			}
 			return sum / 1000000.0;
+#else
+			return 0;
+#endif
 		}
 
 		/// @cond
 		struct Session {
 			Session(float*, int size, Buffer::Content content) {
+#if HAS_KLANG_DEBUG
 				//if (buffer) {
 					//debug.attach(buffer, size);
 				if (buffer.content != Buffer::Notes)
@@ -2486,21 +3785,33 @@ namespace klang {
 				buffer.content = content;
 				buffer.rewind();
 				//}
+#else
+
+#endif
 			}
 			~Session() {
 				//debug.detach();
 			}
 
 			bool hasAudio() const {
+#if HAS_KLANG_DEBUG
 				return buffer.active;
+#else
+				return false;
+#endif
 			}
 			const float* getAudio() const {
+#if HAS_KLANG_DEBUG
 				return buffer.get();
+#else
+				return nullptr;
+#endif
 			}
 		};
 		/// @endcond
 
 		void print(const char* format, ...) {
+#if HAS_KLANG_DEBUG
 			if (console.length < 10000) {
 				THREAD_LOCAL static char string[1024] = { 0 };
 				string[0] = 0;
@@ -2510,9 +3821,13 @@ namespace klang {
 				va_end(args);                     // Clean up the variadic argument list
 				console += string;
 			}
+#else
+
+#endif
 		}
 
 		void printOnce(const char* format, ...) {
+#if HAS_KLANG_DEBUG
 			if (console.length < 1024) {
 				THREAD_LOCAL static char string[1024] = { 0 };
 				string[0] = 0;
@@ -2524,23 +3839,52 @@ namespace klang {
 				if (console.last != string)
 					console += string;
 			}
+#else
+
+#endif
 		}
 
 		bool hasText() const {
+#if HAS_KLANG_DEBUG
 			return console.hasText();
+#else
+			return false;
+#endif
 		}
 
 		int getText(char* buffer) {
+#if HAS_KLANG_DEBUG
 			return console.getText(buffer);
+#else
+			if (buffer) buffer[0] = 0;
+			return 0;
+#endif
 		}
 
 		operator const signal& () const {
+#if HAS_KLANG_DEBUG
 			return buffer.operator const klang::signal & ();
+#else
+			return passthrough();
+#endif
 		}
 
 		using Input::input;
+#if !HAS_KLANG_DEBUG
+		// Keep inline debug taps transparent without touching shared Input::in.
+		static signal& passthrough() {
+			static thread_local signal value = 0;
+			return value;
+		}
+		void input(const signal& value) override { passthrough() = value; }
+		void operator<<(const signal& value) override { passthrough() = value; }
+#endif
 		void input() override {
+#if HAS_KLANG_DEBUG
 			buffer += in;
+#else
+
+#endif
 		}
 	};
 
@@ -2556,8 +3900,6 @@ namespace klang {
 	static Debug debug;
 	inline THREAD_LOCAL Debug::Buffer Debug::buffer; //
 	inline std::mutex Console::_lock;
-
-#define FUNCTION(type) (void(*)(type, Result<type>&))[](type x, Result<type>& y)
 
 	/// @cond
 	template <typename TYPE>
@@ -2591,28 +3933,28 @@ namespace klang {
 
 		using Array::add;
 
-		// single argument
-		Table(TYPE(*function)(TYPE)) {
+		/// Construct and fill a table from a value-returning or Result-writing callable.
+		template<typename FUNCTION, std::enable_if_t<
+			std::is_invocable_r_v<TYPE, FUNCTION&, TYPE> ||
+			std::is_invocable_v<FUNCTION&, TYPE, Result&>, int> = 0>
+		Table(FUNCTION function) {
+			Array::count = SIZE;
+			Result result(Array::items, 0);
 			for (int x = 0; x < SIZE; x++)
-				add(function(x));
+				if constexpr (std::is_invocable_r_v<TYPE, FUNCTION&, TYPE>)
+					Array::items[x] = function((TYPE)x);
+				else {
+					function((TYPE)x, result);
+					result.sum += Array::items[x];
+					if (x + 1 < SIZE) result++;
+				}
 		}
 
 		// double argument
-		Table(void(*function)(TYPE, TYPE), TYPE arg) {
+		Table(TYPE(*function)(TYPE, TYPE), TYPE arg) {
 			Array::count = SIZE;
 			for (int x = 0; x < SIZE; x++)
 				Array::items[x] = function(x, arg);
-		}
-
-		// single argument (enhanced)
-		Table(void(*function)(TYPE x, Result& y)) {
-			Array::count = SIZE;
-			Result y(Array::items, 0);
-			for (int x = 0; x < SIZE; x++) {
-				function((TYPE)x, y);
-				y.sum += Array::items[x];
-				y++;
-			}
 		}
 
 		Table(std::initializer_list<TYPE> values) {
@@ -2634,7 +3976,7 @@ namespace klang {
 		}
 	};
 
-	/// Audio delay object
+	/// Audio delay object (fixed size)
 	template<int SIZE>
 	struct Delay : public Modifier {
 		using Modifier::in;
@@ -2666,20 +4008,6 @@ namespace klang {
 			return buffer[read];
 		}
 
-		//signal tap(float delay) const {
-		//	float read = (float)(position - 1) - delay;
-		//	if (read < 0.f)
-		//		read += SIZE;
-
-		//	const float f = floor(read);
-		//	const float fraction = read - f;
-
-		//	const int i = (int)read;
-		//	const int j = (i + 1) % SIZE;
-
-		//	return buffer[i] + fraction * (buffer[j] - buffer[i]);
-		//}
-
 		signal tap(float delay) const {
 			// Calculate the read position
 			float read = static_cast<float>(position - 1) - delay;
@@ -2697,6 +4025,38 @@ namespace klang {
 			return buffer[i] + fraction * (buffer[j] - buffer[i]);
 		}
 
+		signal lagrange(float delay) const {
+			// Calculate the read position
+			float read = static_cast<float>(position - 1) - delay;
+			if (read < 0.f)
+				read += SIZE;
+
+			// Separate integer and fractional parts
+			int i = static_cast<int>(read);  // Integer part
+			float x = read - i;              // Fractional part (0 ? x < 1)
+
+			// Get four surrounding indices using modulo for circular buffer
+			int i0 = (i - 1 + SIZE) % SIZE;
+			int i1 = i;                      // Main sample
+			int i2 = (i + 1) % SIZE;
+			int i3 = (i + 2) % SIZE;
+
+			// Read corresponding samples
+			float y0 = buffer[i0];
+			float y1 = buffer[i1];
+			float y2 = buffer[i2];
+			float y3 = buffer[i3];
+
+			// Compute Lagrange interpolation (third-order)
+			float c0 = (-x * (x - 1) * (x - 2)) / 6.0f;
+			float c1 = ((x + 1) * (x - 1) * (x - 2)) / 2.0f;
+			float c2 = (-x * (x + 1) * (x - 2)) / 2.0f;
+			float c3 = (x * (x + 1) * (x - 1)) / 6.0f;
+
+			return c0 * y0 + c1 * y1 + c2 * y2 + c3 * y3;
+		}
+
+
 		signal tap() const {
 			// Use modulo to get the next index without branching
 			const int i = last.position;
@@ -2711,10 +4071,117 @@ namespace klang {
 			last.position = (last.position + 1) % SIZE;
 		}
 
-		//Delay<SIZE>& operator++(int) {
-		//	last.position++;
-		//	return *this;
-		//}
+		struct Tap {
+			int position;
+			float fraction;
+		} last;
+
+		virtual void set(param samples) override {
+			time = samples < SIZE ? (float)samples : SIZE;
+
+			float read = static_cast<float>(position - 1) - time;
+			if (read < 0.f)
+				read += SIZE;
+
+			last.position = static_cast<int>(read);  // Integer part
+			last.fraction = read - last.position;	 // Fractional part
+		}
+
+		template<typename TIME>
+		signal operator()(TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>)
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
+		}
+
+		template<typename TIME>
+		signal operator()(const TIME& delay) {
+			if constexpr (std::is_integral_v<TIME>)
+				return tap((int)delay);
+			else if constexpr (std::is_floating_point_v<TIME>)
+				return tap((float)delay);
+			else
+				return tap((signal)delay);
+		}
+
+		unsigned int max() const { return SIZE; }
+	};
+
+	/// Audio delay object (resizable)
+	template<>
+	struct Delay<0> : public Modifier {
+		using Modifier::in;
+		using Modifier::out;
+
+		buffer* buffer;
+		float time = 1;
+		int position = 0;
+		int SIZE = 0;
+
+		Delay() : buffer(new klang::buffer(1, 0)) { clear(); }
+
+		void clear() {
+			buffer->clear();
+		}
+
+		void resize(int samples) {
+			if (samples != SIZE) {
+				SIZE = samples;
+				klang::buffer* new_buffer = new klang::buffer(SIZE + 1, 0);
+				std::swap(buffer, new_buffer);
+				delete new_buffer;
+			}
+		}
+
+		void input() override {
+			(*buffer)++ = in;
+			position++;
+			if (position == SIZE) {
+				buffer->rewind();
+				position = 0;
+			}
+		}
+
+		signal tap(int delay) const {
+			int read = (position - 1) - delay;
+			if (read < 0)
+				read += SIZE;
+			return (*buffer)[read];
+		}
+
+		signal tap(float delay) const {
+			// Calculate the read position
+			float read = static_cast<float>(position - 1) - delay;
+			if (read < 0.f)
+				read += SIZE;
+
+			// Separate integer and fractional parts
+			const int i = static_cast<int>(read);  // Integer part
+			const float fraction = read - i;       // Fractional part
+
+			// Use modulo to get the next index without branching
+			const int j = (i + 1) % SIZE;          // Next index in circular buffer
+
+			// Linear interpolation: buffer[i] + fraction * (buffer[j] - buffer[i])
+			return (*buffer)[i] + fraction * ((*buffer)[j] - (*buffer)[i]);
+		}
+
+		signal tap() const {
+			// Use modulo to get the next index without branching
+			const int i = last.position;
+			const int j = (i + 1) % SIZE;          // Next index in circular buffer
+
+			// Linear interpolation: buffer[i] + fraction * (buffer[j] - buffer[i])
+			return (*buffer)[i] + last.fraction * ((*buffer)[j] - (*buffer)[i]);
+		}
+
+		virtual void process() override {
+			out = tap();
+			last.position = (last.position + 1) % SIZE;
+		}
 
 		struct Tap {
 			int position;
@@ -2804,6 +4271,50 @@ namespace klang {
 		void process() override {
 			position += { increment, size };
 			out = buffer[position + offset /*klang::increment(offset, size)*/];
+		}
+	};
+
+	/// Sample-based signal generator
+	class Sample : public Oscillator {
+		using Oscillator::set;
+	protected:
+		buffer buffer;
+		int size;
+	public:
+		Sample() : buffer(nullptr, 0), size(0) { }
+
+		signal& operator[](int index) {
+			return buffer[index];
+		}
+
+		Sample& operator=(const klang::buffer& buffer) {
+			size = buffer.size;
+			Sample::buffer.attach(buffer, size);
+			return *this;
+		}
+
+		virtual void set(param frequency) override {
+			Oscillator::frequency = frequency;
+			increment = 1;// frequency* (44100 / fs);
+		}
+
+		virtual void set(param frequency, param phase) override {
+			position = phase * float(44100);
+			set(frequency);
+		}
+
+		virtual void set(relative phase) override {
+			offset = phase * float(44100);
+		}
+
+		virtual void set(param frequency, relative phase) override {
+			set(frequency);
+			set(phase);
+		}
+
+		void process() override {
+			position += { increment, size };
+			out = buffer[position + offset];
 		}
 	};
 
@@ -3076,7 +4587,7 @@ namespace klang {
 			}
 		}
 
-		// Scales the envelope duration to specified length 
+		// Scales the envelope duration to specified length
 		void resize(float length) {
 			const float old_length = getLength();
 			if (old_length == 0.0)
@@ -3099,7 +4610,7 @@ namespace klang {
 
 		// Returns the output of the envelope and advances the envelope (for backwards compatibility)
 		signal& operator++(int) {
-			process();
+			this->process();
 			return out;
 		}
 
@@ -3274,14 +4785,22 @@ namespace klang {
 		virtual event preset(int index) {};
 		virtual event midi(int status, int byte1, int byte2) {};
 	public:
-		virtual void onControl(int index, float value) { control(index, value); };
-		virtual void onPreset(int index) { preset(index); };
-		virtual void onMIDI(int status, int byte1, int byte2) { midi(status, byte1, byte2); }
+		virtual void onControl(int index, float value) { this->control(index, value); };
+		virtual void onPreset(int index) { this->preset(index); };
+		virtual void onMIDI(int status, int byte1, int byte2) { this->midi(status, byte1, byte2); }
 	};
 
 	/// Base class for mini-plugin
 	struct Plugin : public Controller {
 		virtual ~Plugin() {}
+
+		template<typename DERIVED, typename... ARGS>
+		static DERIVED* Create(ARGS&&... args) {
+			static_assert(std::is_base_of_v<Plugin, DERIVED>);
+			DERIVED* p = new DERIVED();
+			p->controls.set(std::forward<ARGS>(args)...);
+			return p;
+		}
 
 		Controls controls;
 		Presets presets;
@@ -3294,15 +4813,19 @@ namespace klang {
 		virtual void prepare() {};
 		virtual void process() { out = in; }
 		virtual void process(buffer buffer) {
-			prepare();
+			this->prepare();
 			while (!buffer.finished()) {
 				input(buffer);
 				this->process();
 				buffer++ = out;
+#if HAS_KLANG_DEBUG
 				debug.buffer++;
+#endif
 			}
 		}
 	};
+
+	struct Sound : Effect { };
 
 	/// Base class for synthesiser notes
 	template<class SYNTH>
@@ -3324,7 +4847,8 @@ namespace klang {
 		virtual event on(Pitch p, Velocity v) {}
 		virtual event off(Velocity v = 0) { stage = Off; }
 
-		SYNTH* getSynth() { return synth; }
+		//SYNTH* getSynth() { return synth; }
+		auto getSynth() { return static_cast<std::remove_pointer_t<decltype(synth)>*>(synth); }
 	public:
 		Pitch pitch;
 		Velocity velocity;
@@ -3380,16 +4904,18 @@ namespace klang {
 		virtual void prepare() {}
 		virtual void process() override = 0;
 		virtual bool process(buffer buffer) {
-			prepare();
+			this->prepare();
 			while (!buffer.finished()) {
 				this->process();
-				buffer++ = out;
+				buffer++ += out;
+#if HAS_KLANG_DEBUG
 				debug.buffer++;
+#endif
 			}
 			return !finished();
 		}
 		virtual bool process(buffer* buffer) {
-			return process(buffer[0]);
+			return this->process(buffer[0]);
 		}
 	};
 
@@ -3484,7 +5010,7 @@ namespace klang {
 
 		// pass to synth and notes
 		virtual event onControl(int index, float value) override {
-			control(index, value);
+			this->control(index, value);
 			for (unsigned int n = 0; n < notes.count; n++)
 				if (notes[n]->stage != Note::Off)
 					notes[n]->onControl(index, value);
@@ -3492,7 +5018,7 @@ namespace klang {
 
 		// pass to synth and notes
 		virtual event onMIDI(int status, int byte1, int byte2) override {
-			onMIDI(status, byte1, byte2);
+			this->midi(status, byte1, byte2);
 			for (unsigned int n = 0; n < notes.count; n++)
 				if (notes[n]->stage != Note::Off)
 					notes[n]->onMIDI(status, byte1, byte2);
@@ -3500,7 +5026,7 @@ namespace klang {
 
 		// pass to synth and notes
 		virtual event onPreset(int index) override {
-			preset(index);
+			this->preset(index);
 			for (unsigned int n = 0; n < notes.count; n++)
 				if (notes[n]->stage != Note::Off)
 					notes[n]->onPreset(index);
@@ -3520,9 +5046,22 @@ namespace klang {
 					notes[n]->release(velocity);
 		}
 
+		virtual event allNotesOff(float velocity = 0.f) {
+			for (unsigned int n = 0; n < notes.count; n++)
+				if (notes[n]->stage != Note::Off)
+					notes[n]->release(velocity);
+		}
+
 		// post processing (see Effect::process)
 		virtual void process() override { out = in; }
 		virtual void process(buffer buffer) override { Effect::process(buffer); }
+
+		virtual bool playing() const {
+			for (unsigned int n = 0; n < notes.count; n++)
+				if (notes[n]->stage != Note::Off)
+					return true;
+			return false;
+		}
 
 		virtual void process(float* buffer, int length, float* parameters = nullptr) {
 			klang::buffer mono(buffer, length);
@@ -3664,7 +5203,7 @@ namespace klang {
 		// interleaved access to non-interleaved stereo buffers
 		struct buffer {
 			typedef Stereo::signal signal;
-			mono::buffer& left, right;
+			mono::buffer &left, &right;
 
 			buffer(const buffer& buffer) : left(buffer.left), right(buffer.right) { rewind(); }
 			buffer(mono::buffer& left, mono::buffer& right) : left(left), right(right) { rewind(); }
@@ -3725,6 +5264,10 @@ namespace klang {
 				right.rewind();
 			}
 		};
+
+		namespace interleaved {
+			using buffer = klang::interleaved::buffer<2>;
+		}
 
 		/// Stereo audio object adapter
 		template<class TYPE>
@@ -3793,15 +5336,32 @@ namespace klang {
 			virtual void prepare() {};
 			virtual void process() { out = in; };
 			virtual void process(Stereo::buffer buffer) {
-				prepare();
+				this->prepare();
 				while (!buffer.finished()) {
 					input(buffer);
-					process();
+					this->process();
 					buffer++ = out;
+#if HAS_KLANG_DEBUG
 					debug.buffer++;
+#endif
 				}
 			}
+			/// Process interleaved host frames; inherited by the current Stereo::Sound.
+			virtual void process(interleaved::buffer buffer) {
+				this->prepare();
+				while (!buffer.finished()) {
+					input(buffer);
+					this->process();
+					buffer++ = out;
+#if HAS_KLANG_DEBUG
+					debug.buffer++;
+#endif
+				}
+			}
+
 		};
+
+		struct Sound : Effect { };
 
 		struct Synth;
 
@@ -3812,16 +5372,16 @@ namespace klang {
 			virtual void prepare() {}
 			virtual void process() override = 0;
 			virtual bool process(Stereo::buffer buffer) {
-				prepare();
+				this->prepare();
 				while (!buffer.finished()) {
-					process();
+					this->process();
 					buffer++ += out;
 				}
 				return !finished();
 			}
 			virtual bool process(mono::buffer* buffers) {
 				buffer buffer = { buffers[0], buffers[1] };
-				return process(buffer);
+				return this->process(buffer);
 			}
 		};
 
@@ -3832,9 +5392,9 @@ namespace klang {
 				virtual void prepare() override {}
 				virtual void process() override = 0;
 				virtual bool process(Stereo::buffer buffer) override {
-					prepare();
+					this->prepare();
 					while (!buffer.finished()) {
-						process();
+						this->process();
 						buffer.left += out;
 						buffer.right += out;
 						buffer++;
@@ -3874,7 +5434,7 @@ namespace klang {
 
 			// pass to synth and notes
 			virtual event onControl(int index, float value) override {
-				control(index, value);
+				this->control(index, value);
 				for (unsigned int n = 0; n < notes.count; n++)
 					if (notes[n]->stage != Note::Off)
 						notes[n]->onControl(index, value);
@@ -3882,7 +5442,7 @@ namespace klang {
 
 			// pass to synth and notes
 			virtual event onMIDI(int status, int byte1, int byte2) override {
-				onMIDI(status, byte1, byte2);
+				this->midi(status, byte1, byte2);
 				for (unsigned int n = 0; n < notes.count; n++)
 					if (notes[n]->stage != Note::Off)
 						notes[n]->onMIDI(status, byte1, byte2);
@@ -3890,7 +5450,7 @@ namespace klang {
 
 			// pass to synth and notes
 			virtual event onPreset(int index) override {
-				preset(index);
+				this->preset(index);
 				for (unsigned int n = 0; n < notes.count; n++)
 					if (notes[n]->stage != Note::Off)
 						notes[n]->onPreset(index);
@@ -3910,9 +5470,22 @@ namespace klang {
 						notes[n]->release(velocity);
 			}
 
+			virtual event allNotesOff(float velocity = 0.f) {
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						notes[n]->release(velocity);
+			}
+
 			// post processing (see Effect::process)
 			virtual void process() override { out = in; }
 			virtual void process(buffer buffer) override { Effect::process(buffer); }
+
+			virtual bool playing() const {
+				for (unsigned int n = 0; n < notes.count; n++)
+					if (notes[n]->stage != Note::Off)
+						return true;
+				return false;
+			}
 
 			virtual void process(float** buffers, int length, float* parameters = nullptr) {
 				klang::buffer left(buffers[0], length);
@@ -3976,6 +5549,57 @@ namespace klang {
 		return destination;
 	}
 
+	/** Fast scalar approximations. Angles use radians unless a `p` suffix
+	 * identifies an unsigned 32-bit phase covering one complete turn.
+	 * Sine uses the retained V2/Farbrausch range reduction and Robin Green
+	 * odd polynomial. Cosine reuses that polynomial with direct quadrant
+	 * reduction, avoiding an added pi/2 before the existing modulo step.
+	 */
+	namespace fast {
+		constexpr float twoPi = float(2.0 * 3.1415926535897932384626433832795);
+
+		namespace detail {
+			inline float sin(float x) {
+				const float x2 = x * x;
+				return (((-0.00018542f * x2 + 0.0083143f) * x2 - 0.16666f) * x2 + 1.0f) * x;
+			}
+		}
+
+		/// Approximate sine of a finite angle in radians.
+		inline float sin(float x) {
+			x = fast_mod2pi(x);
+			if (x > 3 / 2.f * pi)
+				x -= twoPi;
+			else if (x > pi / 2)
+				x = pi - x;
+			return detail::sin(x);
+		}
+
+		/// Approximate cosine of a finite angle in radians.
+		inline float cos(float x) {
+			x = fast_mod2pi(x);
+			x = x < pi ? pi / 2.f - x : x - 3.f / 2.f * pi;
+			return detail::sin(x);
+		}
+
+		/// Approximate sine from an unsigned 32-bit phase covering one turn.
+		inline float sinp(unsigned int phase) {
+			float x = fast_modp(phase);
+			if (x > 3.f / 2.f * pi)
+				x -= twoPi;
+			else if (x > pi / 2.f)
+				x = pi - x;
+			return detail::sin(x);
+		}
+
+		/// Approximate cosine from an unsigned 32-bit phase covering one turn.
+		inline float cosp(unsigned int phase) {
+			float x = fast_modp(phase);
+			x = x < pi ? pi / 2.f - x : x - 3.f / 2.f * pi;
+			return detail::sin(x);
+		}
+	}
+
 	/// Common audio generators / oscillators.
 	namespace Generators {
 		using namespace klang;
@@ -3985,7 +5609,7 @@ namespace klang {
 			/// Sine wave oscillator
 			struct Sine : public Oscillator {
 				void process() {
-					out = sin(position + offset);
+					out = sin(position.wrapped(offset));
 					position += increment;
 				}
 			};
@@ -3993,15 +5617,23 @@ namespace klang {
 			/// Saw wave oscillator (aliased)
 			struct Saw : public Oscillator {
 				void process() {
-					out = position * pi.inv - 1.f;
+					out = position.wrapped(offset) * pi.inv - 1.f;
 					position += increment;
+				}
+			};
+
+			/// Aliased 0-to-1 ramp; frequency in Hz, absolute phase in radians, like Basic::Saw.
+			struct Phasor : Saw {
+				void process() override {
+					Saw::process();
+					out = out * 0.5f + 0.5f;
 				}
 			};
 
 			/// Triangle wave oscillator (aliased)
 			struct Triangle : public Oscillator {
 				void process() {
-					out = abs(2.f * position * pi.inv - 2) - 1.f;
+					out = abs(2.f * position.wrapped(offset) * pi.inv - 2) - 1.f;
 					position += increment;
 				}
 			};
@@ -4009,7 +5641,7 @@ namespace klang {
 			/// Square wave oscillator (aliased)
 			struct Square : public Oscillator {
 				void process() {
-					out = position > pi ? 1.f : -1.f;
+					out = position.wrapped(offset) > pi ? 1.f : -1.f;
 					position += increment;
 				}
 			};
@@ -4025,7 +5657,7 @@ namespace klang {
 				}
 
 				void process() {
-					out = position > (duty * pi) ? 1.f : -1.f;
+					out = position.wrapped(offset) > (duty * pi) ? 1.f : -1.f;
 					position += increment;
 				}
 			};
@@ -4043,183 +5675,71 @@ namespace klang {
 			constexpr float twoPi = float(2.0 * 3.1415926535897932384626433832795);
 			constexpr float twoPiInv = float(1.0 / twoPi);
 
-			/// Phase increment (optimised)
+			/// Signed phase step stored modulo one turn (2^32 ticks).
 			struct Increment {
-				// represent phase delta using full range of int32
-				// (integer math, no conditionals, free oversampling)
 				signed int amount = 0;
-
 				void reset() { amount = 0; }
 
-				// set increment given frequency (in Hz)
-				void set(Frequency f) {
-					constexpr float FC4 = float(261.62556530059862);			// Reference Freq (C4 = 261Hz)
-					constexpr float FC4_FINTMAX = float(261.62556530059862 * 2147483648.0);
-					const float FBASE = (FC4_FINTMAX) / klang::fs;
-					amount = 2u * (signed int)(FBASE / FC4 * f);
+				void set(Frequency hz) {
+					double cycles = fs > 0 && std::isfinite(hz.value) ? double(hz.value) / fs : 0;
+					if (cycles <= -1 || cycles >= 1)
+						cycles = std::fmod(cycles, 1.0);
+					const unsigned int bits = static_cast<unsigned int>(
+						static_cast<long long>(cycles * 4294967296.0));
+					std::memcpy(&amount, &bits, sizeof(amount));
 				}
 
-				// convert int32 to float [0, 2pi)
-				operator float() const {
-					const unsigned int i = (amount >> 9) | 0x3f800000;
-					return *(const float*)&i - 1.f;
-				}
-
-				Increment operator+(const Increment& in) const {
-					return { in.amount + amount };
+				// Signed principal step in cycles; phase addition uses the wrapping bits.
+				operator float() const { return float(double(amount) / 4294967296.0); }
+				Increment operator+(const Increment& other) const {
+					Increment result;
+					const unsigned int bits = static_cast<unsigned int>(amount) + static_cast<unsigned int>(other.amount);
+					std::memcpy(&result.amount, &bits, sizeof(bits));
+					return result;
 				}
 			};
 
-			/// Oscillator phase (optimised)
+			/// Wrapping oscillator phase; setters take radians, conversion gives cycles.
+#pragma float_control(precise, on, push)
 			struct Phase {
-				// represent phase using full range of uint32
-				// (integer math, no conditionals, free oversampling)
 				unsigned int position = 0;
 
-				// convert float [0, 2pi) to uint32
 				Phase& operator=(klang::Phase phase) {
-					constexpr float FINTMAX = 2147483648.0f; // (float)INT_MAX + 1.f;
-					phase = phase * FINTMAX / (2.f * pi);
-					position = (unsigned int)phase;
+					double cycles = std::isfinite(phase.value) ? double(phase.value) / twoPi : 0;
+					cycles -= std::floor(cycles);
+					position = cycles < 1 ? static_cast<unsigned int>(cycles * 4294967296.0) : 0;
 					return *this;
-
-					//position = 2u * (signed int)(phase * (float(INT_MAX) + 1.f) * twoPiInv);
-					//return *this;
 				}
 
-				// convert uint32 to float [0, 1)
+				// Full counter precision for transition integration, including very low Hz.
+				double cycles() const { return double(position) / 4294967296.0; }
 				operator float() const {
-					const unsigned int i = (position >> 9) | 0x3f800000;
-					return (*(const float*)&i - 1.f);
-
-					//// = quarter-turn (pi/2) phase offset
-					//unsigned int phase = position + 0x40000000;
-
-					//// range reduce to [0,pi]
-					//if (phase & 0x80000000) // cos(x) = cos(-x)
-					//	phase = ~phase; 
-
-					//// convert to float in range [-pi/2,pi/2)
-					//phase = (phase >> 8) | 0x3f800000;
-					//return *(float*)&phase * pi - 3.f/2.f * pi; // 1.0f + (phase / (2^31))
+					const unsigned int bits = (position >> 9) | 0x3f800000;
+					float value;
+					std::memcpy(&value, &bits, sizeof(value));
+					return value - 1.f;
 				}
 
-				// returns offset phase
 				float operator+(const Phase& offset) const {
-
-					unsigned int phase = (position + offset.position) + 0x40000000; // = quarter-turn (pi/2) phase offset
-					// range reduce to [0,pi]
-					if (phase & 0x80000000) // cos(x) = cos(-x)
+					unsigned int phase = position + offset.position + 0x40000000;
+					if (phase & 0x80000000)
 						phase = ~phase;
-
-					// convert to float in range [-pi/2,pi/2)
-					phase = (phase >> 8) | 0x3f800000;
-					return *(float*)&phase * pi - 3.f / 2.f * pi; // 1.0f + (phase / (2^31))
+					const unsigned int bits = (phase >> 8) | 0x3f800000;
+					float value;
+					std::memcpy(&value, &bits, sizeof(value));
+					return value * pi - 1.5f * pi;
 				}
-
-				// convert uint32 to float [0, 2pi)
-				float radians() const {
-					return operator float();
-				}
-
-				// applies increment and returns float [0, 2pi)
-				//float operator+=(Increment i) {
-				//	unsigned int phase = position + 0x40000000; // = quarter-turn (pi/2) phase offset
-				//	position += i.amount;						// apply increment
-
-				//	// range reduce to [0,pi]
-				//	if (phase & 0x80000000) // cos(x) = cos(-x)
-				//		phase = ~phase;
-
-				//	// convert to float in range [-pi/2,pi/2)
-				//	phase = (phase >> 8) | 0x3f800000;
-				//	return *(float*)&phase * pi - 3 / 2.f * pi; // 1.0f + (phase / (2^31))
-				//}
-
-				// applies increment and returns float [0, 2pi)
-				Phase& operator+=(const Increment i) {
-					position += i.amount;						// apply increment
+				float radians() const { return float(cycles() * twoPi); }
+				Phase& operator+=(const Increment step) {
+					position += static_cast<unsigned int>(step.amount);
 					return *this;
 				}
-
-				// applies increment and returns float [0, 2pi)
-				//Phase operator+(const Phase& i) const {
-				//	return { position + i.position };				// apply increment
-				//}
-
-				//// applies increment and returns float [0, 2pi)
-				//float operator+=(Increment i) {
-				//	unsigned int phase = position + 0x40000000; // = quarter-turn (pi/2) phase offset
-				//	position += i.amount;						// apply increment
-
-				//	// range reduce to [0,pi]
-				//	if (phase & 0x80000000) // cos(x) = cos(-x)
-				//		phase = ~phase; 
-
-				//	// convert to float in range [-pi/2,pi/2)
-				//	phase = (phase >> 8) | 0x3f800000;
-				//	return *(float*)&phase * pi - 3/2.f * pi; // 1.0f + (phase / (2^31))
-				//}
-
-				//Phase& operator+(Phase offset) const {
-				//	offset.position += position;
-				//	return offset;
-				//}
-
-				//static void test() {
-				//	Phase p;
-				//	assert((float)(p = 0.f).radians() == 0.f);
-				//	assert((float)(p = pi/2).radians() == pi/2);
-				//	assert((float)(p = pi).radians() == pi);
-				//	assert((float)(p = 3*pi/2).radians() == 3*pi/2);
-				//	assert((float)(p = 2*pi).radians() == 0.f);
-				//}
 			};
-
-			/// sin approximation [-pi/2, pi/2] using odd minimax polynomial (Robin Green)
-			inline static float polysin(float x) {
-				const float x2 = x * x;
-				return (((-0.00018542f * x2 + 0.0083143f) * x2 - 0.16666f) * x2 + 1.0f) * x;
-			}
-
-			/// fast sine (based on V2/Farbrausch; using polysin)
-			inline static float fastsin(float x)
-			{
-				// Range reduction to [0, 2pi]
-				//x = fmodf(x, twoPi);
-				//if (x < 0)			// support -ve phase (e.g. for FM)
-				//	x += twoPi;		//
-				x = fast_mod2pi(x);
-
-				// Range reduction to [-pi/2, pi/2]
-				if (x > 3 / 2.f * pi)	// 3/2pi ... 2pi
-					x -= twoPi;	// (= translated)
-				else if (x > pi / 2)	// pi/2 ... 3pi/2
-					x = pi - x;		// (= mirrored)
-
-				return polysin(x);
-			}
-
-			/// fast sine (using polysin and integer math)
-			inline static float fastsinp(unsigned int p)
-			{
-				// Range reduction to [0, 2pi]
-				//x = fmodf(x, twoPi);
-				//if (x < 0)			// support -ve phase (e.g. for FM)
-				//	x += twoPi;		//
-				float x = fast_modp(p);
-
-				// Range reduction to [-pi/2, pi/2]
-				if (x > 3.f / 2.f * pi)	// 3/2pi ... 2pi
-					x -= twoPi;			// (= translated)
-				else if (x > pi / 2.f)	// pi/2 ... 3pi/2
-					x = pi - x;			// (= mirrored)
-
-				return polysin(x);
-			}
+#pragma float_control(pop)
 
 			/// Sine wave oscillator (band-limited, optimised)
 			struct Sine : public Oscillator {
+				Sine() { set(frequency); }
 				void reset() override {
 					Sine::position = Oscillator::position = 0;
 					Sine::offset = Oscillator::offset = 0;
@@ -4227,7 +5747,8 @@ namespace klang {
 				}
 
 				void set(param frequency) override {
-					if (frequency != Oscillator::frequency) {
+					if (frequency != Oscillator::frequency || sampleRate != double(fs)) {
+						sampleRate = fs;
 						Oscillator::frequency = frequency;
 						increment.set(frequency);
 					}
@@ -4249,196 +5770,367 @@ namespace klang {
 				}
 
 				void process() override {
-					out = fastsinp(position.position + offset.position);
+					out = klang::fast::sinp(position.position + offset.position);
 					position += increment;
 				}
 
 			protected:
+				double sampleRate = 0;
 				Fast::Increment increment;
 				Fast::Phase position, offset;
 			};
 
-			/// Oscillator State Machine
+			/** V2 oscillator state machine, with float arithmetic in the sample loop.
+			 * Based on Farbrausch V2 (Tammo Hinrichs; C++ port Fabian Giesen).
+			 * Averages the interval ending at the current phase, then advances.
+			 * Frequency: abs(Hz) < sample rate; phase: radians; duty: [0,1].
+			 * Zero Hz holds the point value. Unsupported/invalid Hz holds phase.
+			 * Box averaging reduces aliasing; it is not an ideal band-limit.
+			 * Negative Hz reflects phase in set(); both directions use the forward state machine.
+			 * See V2-SOURCE-REVIEW.md and OSM-STATUS.md for provenance and limits.
+			 */
+			// Experimental replacement for Fast::OSM, inserted by probe_osm_layout.py.
+			// Not a standalone include. See OSM-REFLECTION.md for the identity and results.
+#if defined(_MSC_VER)
+#define KLANG_OSM_INLINE __forceinline
+#elif defined(__clang__) || defined(__GNUC__)
+#define KLANG_OSM_INLINE inline __attribute__((always_inline))
+#else
+#define KLANG_OSM_INLINE inline
+#endif
 			struct OSM {
 				using Waveform = float(OSM::*)();
 				const Waveform waveform;
+				KLANG_OSM_INLINE OSM(Waveform waveform) : waveform(waveform) {}
 
-				OSM(Waveform waveform) : waveform(waveform) {}
-
-				enum State { // carry:old_up:new_up
-					NewUp = 0b001, NewDown = 0b000,
-					OldUp = 0b010, OldDown = 0b000,
-					Carry = 0b100, NoCarry = 0b000,
-
-					Down = OldDown | NewDown | NoCarry,
-					UpDown = OldUp | NewDown | NoCarry,
-					Up = OldUp | NewUp | NoCarry,
-					DownUpDown = OldDown | NewDown | Carry,
-					DownUp = OldDown | NewUp | Carry,
-					UpDownUp = OldUp | NewUp | Carry
-				};
-
+				// Transition bits: wrap:previous_up:current_up; "up" means phase < breakpoint.
+				// Internal phase always travels forwards, including for negative Hz.
+				// Codes 001/110 are retained for comparison but cannot occur here.
+				// The stored state contains only the two history bits; tick() adds wrap.
+				enum State { Down = 0, ReversePeak = 1, UpDown = 2, Up = 3,
+							DownUpDown = 4, DownUp = 5, ReverseWrap = 6, UpDownUp = 7 };
+				static constexpr double turn = 4294967296.0;
+				static constexpr float tickScale = 1.f / 4294967296.f;
 				Fast::Increment increment;
-				Fast::Phase offset;
-				Fast::Phase duty;
-				State state;
-				float delta;
+				Fast::Phase offset, phaseOffset;
+				unsigned long long breakpoint = 0, threshold = 0;
+				// Exact breakpoint is integer + fraction. Reflected phase has that same
+				// fraction; forward phase is integer. Cache corrections in cycle units.
+				float fraction = 0, phaseFraction = 0, peakFraction = 0;
+				State state = Down;
+				bool reverse = false;
+				param frequency = 0;
+				float sampleRate = 0;
+				double stepScale = 0;
+				float col = 0, fallingWidth = 1, f = 0, inverseStep = 0;
+				float rising = 0, falling = 1;
+				float upSlope = 0, downSlope = 2 * tickScale;
+				float upBias = -1, downBias = -1;
+				// Triangle/saw polarity is folded into coefficients; pulse keeps +1.
+				float amplitude = 1;
+				float gain = 1, peak = 1, high = 1, low = -1;
 
-				// coeffeficients
-				float f, omf, rcpf, rcpf2, col;
-				float c1, c2;
-
-				param frequency = 0; // cached to optimise updates
-
-				void init() {
-					state = (offset.position - increment.amount) < duty.position ? Up : Down;
-					f = delta;
-					omf = 1.f - f;
-					rcpf2 = 2.f * (rcpf = 1.f / f);
-					col = duty;
-
-					c1 = 1.f / col;
-					c2 = -1.f / (1.0f - col);
+				KLANG_OSM_INLINE void sync() {
+					state = (offset.position - static_cast<unsigned int>(increment.amount)) < threshold ? Up : Down;
 				}
-
-				void set(param frequency) {
-					if (OSM::frequency != frequency) {
-						OSM::frequency = frequency;
-						increment.set(frequency);
-						delta = increment;
-						init();
+				KLANG_OSM_INLINE void coefficients() {
+					threshold = breakpoint + (!reverse && fraction > 0);
+					phaseFraction = reverse ? fraction * tickScale : 0;
+					peakFraction = reverse ? 0 : fraction * tickScale;
+					upSlope = 2 * tickScale * rising;
+					downSlope = 2 * tickScale * falling;
+					upBias = (2 * phaseFraction - f) * rising - amplitude;
+					downBias = (f - 2 * phaseFraction) * falling - amplitude;
+					peak = amplitude;
+					high = 1;
+					low = -1;
+					if (gain != 1) {
+						upSlope *= gain;
+						downSlope *= gain;
+						upBias *= gain;
+						downBias *= gain;
+						peak *= gain;
+						const float mean = (1 - gain) * (2 * col - 1);
+						high = mean + gain;
+						low = mean - gain;
+					}
+					sync();
+				}
+				// Only called outside the ordinary sub-cycle frequency range. fmod preserves
+				// residual phase even when the number of complete turns exceeds double's integers.
+				unsigned int wideStep(unsigned int bits);
+				KLANG_OSM_INLINE void set(param hz) {
+					if (frequency != hz || sampleRate != fs.f) {
+						frequency = hz;
+						if (sampleRate != fs.f) {
+							sampleRate = fs.f;
+							stepScale = sampleRate > 0 ? turn / sampleRate : 0;
+						}
+						const float magnitude = std::fabs(hz.value);
+						unsigned int ticks;
+						gain = 1;
+						if (magnitude < sampleRate) {
+							ticks = static_cast<unsigned int>(magnitude * stepScale);
+							f = float(ticks) * tickScale;
+							inverseStep = f > 0 ? 1.f / f : 0;
+						} else {
+							std::memcpy(&ticks, &hz.value, sizeof(ticks));
+							ticks = wideStep(ticks);
+						}
+						// A negative frequency that rounds to zero keeps the point-value convention.
+						const bool negative = hz < 0 && (ticks != 0 || gain != 1);
+						// Reflect q = breakpoint - p only when the quantised direction changes.
+						if (reverse != negative) {
+							reverse = negative;
+							offset.position = static_cast<unsigned int>(breakpoint) - offset.position;
+							if (waveform == &OSM::saw) {
+								amplitude = -amplitude;
+								rising = -rising;
+								falling = -falling;
+							}
+						}
+						std::memcpy(&increment.amount, &ticks, sizeof(ticks));
+						coefficients();
 					}
 				}
-
-				void set(param frequency, param phase) {
-					if (OSM::frequency != frequency) {
-						OSM::frequency = frequency;
-						increment.set(frequency);
-						delta = increment;
-					}
+				KLANG_OSM_INLINE void set(param hz, param phase) {
+					set(hz);
 					offset = phase;
-					init();
+					if (reverse) offset.position = static_cast<unsigned int>(breakpoint) - offset.position;
+					phaseOffset = 0;
+					sync();
 				}
-
-				void set(param frequency, param phase, param duty) {
-					if (OSM::frequency != frequency) {
-						OSM::frequency = frequency;
-						increment.set(frequency);
-						delta = increment;
-					}
-					offset = phase;
+				KLANG_OSM_INLINE void set(param hz, param phase, param duty) {
+					set(hz, phase);
 					setDuty(duty);
 				}
-
-				void setDuty(param duty) {
-					OSM::duty = duty * (2.f * pi);
-					init();
+				KLANG_OSM_INLINE void setDuty(param duty) {
+					const double width = std::isfinite(duty.value) ? std::clamp(double(duty.value), 0.0, 1.0) : 0.5;
+					const double ticks = width * turn;
+					const auto whole = static_cast<unsigned long long>(ticks);
+					setBreakpoint(whole, float(ticks - whole));
 				}
-
-				State tick() {
-					// old_up = new_up, new_up = (cnt < brpt)
-					state = (State)(((state << 1) | (offset.position < duty.position)) & (NewUp | OldUp));
-
-					// we added freq to cnt going from the previous sample to the current one.
-					// so if cnt is less than freq, we carried.
-					const State transition = (State)(state | (offset.position < (unsigned int)increment.amount ? DownUpDown : Down));
-
-					// finally, tick the oscillator
-					offset += increment;
-
+				// Counter-space breakpoint also represents the exact duty=1 endpoint.
+				KLANG_OSM_INLINE void setBreakpoint(unsigned long long ticks, float remainder = 0) {
+					if (reverse) offset.position += static_cast<unsigned int>(ticks - breakpoint);
+					breakpoint = ticks;
+					fraction = remainder;
+					col = (float(breakpoint) + fraction) * tickScale;
+					fallingWidth = (float(4294967296ull - breakpoint) - fraction) * tickScale;
+					rising = col > 0 ? amplitude / col : 0;
+					falling = fallingWidth > 0 ? amplitude / fallingWidth : 0;
+					coefficients();
+				}
+				KLANG_OSM_INLINE void setOffset(param radians) {
+					const unsigned int previous = phaseOffset.position;
+					phaseOffset = radians;
+					const unsigned int delta = phaseOffset.position - previous;
+					offset.position += reverse ? 0u - delta : delta;
+					sync();
+				}
+				KLANG_OSM_INLINE void reset() {
+					offset = phaseOffset;
+					if (reverse) offset.position = static_cast<unsigned int>(breakpoint) - offset.position;
+					sync();
+				}
+				KLANG_OSM_INLINE State tick() {
+					state = State(((state << 1) | (offset.position < threshold)) & 3);
+					// Internal phase always advances, so the original forward carry test suffices.
+					const bool carry = (offset.position < static_cast<unsigned int>(increment.amount));
+					const State transition = State(state | (carry ? 4 : 0));
+					offset.position += static_cast<unsigned int>(increment.amount);
 					return transition;
 				}
+				KLANG_OSM_INLINE float output() { return (this->*waveform)(); }
 
-				inline static float sqr(float x) { return x * x; }
-				inline float output() { return (this->*waveform)(); }
-
-				//inline float saw() {
-				//	const float f = delta;
-				//	const float omf = 1.f - f;
-				//	const float rcpf = 1.f / f;
-				//	const float col = duty;
-				//	const float c1 = 1.f / col;
-				//	const float c2 = -1.f / (1.0f - col);
-				//	const float p = offset - col;
-				//	float y = 0.0f;
-				//	// state machine action
-				//	switch (tick()) {
-				//	case Up:		 y = c1 * (p + p - f); break; // average of linear function = just sample in the middle
-				//	case Down:		 y = c2 * (p + p - f); break; // again, average of a linear function
-				//	case UpDown:	 y = rcpf * (c2 * sqr(p) - c1 * sqr(p - f));		  break;
-				//	case DownUp:	 y = -rcpf * (1.f + c2 * sqr(p + omf) - c1 * sqr(p)); break;
-				//	case UpDownUp:	 y = -rcpf * (1.f + c1 * omf * (p + p + omf));		  break;
-				//	case DownUpDown: y = -rcpf * (1.f + c2 * omf * (p + p + omf));		  break;
-				//	default:		 y = -1; // should never happen
-				//	}
-				//	return y + 1.f;
-				//}
-
-				float saw() { return saw(offset - col, tick()); }
-				inline float saw(const float p, const State state) const {
-					// state machine action
-					switch (state) {
-					case Up:		 return c1 * (p + p - f) + 1.f; break; // average of linear function = just sample in the middle
-					case Down:		 return c2 * (p + p - f) + 1.f; break; // again, average of a linear function
-					case UpDown:	 return rcpf * (c2 * sqr(p) - c1 * sqr(p - f)) + 1.f;		   break;
-					case DownUp:	 return -rcpf * (1.f + c2 * sqr(p + omf) - c1 * sqr(p)) + 1.f; break;
-					case UpDownUp:	 return -rcpf * (1.f + c1 * omf * (p + p + omf)) + 1.f;		   break;
-					case DownUpDown: return -rcpf * (1.f + c2 * omf * (p + p + omf)) + 1.f;		   break;
-					default:		 return 0.f; // should never happen
+				KLANG_OSM_INLINE float saw() {
+					const unsigned int end = offset.position;
+					switch (tick()) {
+					case Up:
+						return float(end) * upSlope + upBias;
+					case Down:
+						return (float(0xffffffffu - end) + 1.f) * downSlope + downBias;
+					// Apply fractional corrections only at edges; ordinary samples use cached biases.
+					case UpDown: {
+						const float after = (float(end - static_cast<unsigned int>(breakpoint)) * tickScale - peakFraction);
+						const float before = (float(static_cast<unsigned int>(increment.amount) - (end - static_cast<unsigned int>(breakpoint))) * tickScale + peakFraction);
+						return peak - inverseStep * (before * before * rising + after * after * falling);
+					}
+					case DownUp: {
+						const float after = (float(end) * tickScale + phaseFraction);
+						const float before = (float(static_cast<unsigned int>(increment.amount) - end) * tickScale - phaseFraction);
+						return -peak + inverseStep * (before * before * falling + after * after * rising);
+					}
+					case UpDownUp: {
+						const unsigned int forwardEnd = end;
+						return -(1 - f) * inverseStep * rising * (2 * (float(forwardEnd) * tickScale + phaseFraction) - f + fallingWidth);
+					}
+					case DownUpDown: {
+						const unsigned int forwardEnd = end;
+						return (1 - f) * inverseStep * falling * (2 * (float(forwardEnd) * tickScale + phaseFraction) - f - col);
+					}
+					default:
+						return 0;
 					}
 				}
-
-				float pulse() { return pulse(offset, tick()); }
-				inline float pulse(const float p, const State state) const {
-					// state machine action
-					switch (state) {
-					case Up:		 return 1.f;							break;
-					case Down:		 return -1.f;							break;
-					case UpDown:	 return rcpf2 * (col - p) + 1.f;		break;
-					case DownUp:	 return rcpf2 * p - 1.f;				break;
-					case UpDownUp:	 return rcpf2 * (col - 1.0f) + 1.f;		break;
-					case DownUpDown: return rcpf2 * col - 1.f;				break;
-					default:		 return 0; // should never happen
+				KLANG_OSM_INLINE float pulse() {
+					const unsigned int end = offset.position;
+					switch (tick()) {
+					case Up:
+						return high;
+					case Down:
+						return low;
+					case UpDown:
+						return high - 2 * inverseStep * ((float(end - static_cast<unsigned int>(breakpoint)) * tickScale - peakFraction));
+					case DownUp:
+						return 2 * inverseStep * ((float(end) * tickScale + phaseFraction)) + low;
+					case UpDownUp:
+						return high - 2 * inverseStep * fallingWidth;
+					case DownUpDown:
+						return 2 * inverseStep * col + low;
+					default:
+						return 0;
 					}
 				}
 			};
 
+			// Keep exceptional-input handling precise while the ordinary setter/sample path
+			// retains the host's fast-math settings. Integer argument bits also avoid Clang's
+			// no-infinity assumptions on a floating parameter declared in fast-math scope.
+			#pragma float_control(precise, on, push)
+			#if defined(_MSC_VER)
+			__declspec(noinline)
+			#elif defined(__GNUC__)
+			__attribute__((noinline))
+			#endif
+			inline unsigned int OSM::wideStep(unsigned int bits) {
+				if ((bits & 0x7f800000u) == 0x7f800000u || sampleRate <= 0) {
+					f = inverseStep = 0;
+					gain = 1;
+					return 0;
+				}
+				float hz;
+				std::memcpy(&hz, &bits, sizeof(hz));
+				const double magnitude = std::fabs(double(hz));
+				const double whole = std::floor(magnitude / sampleRate);
+				const unsigned int ticks = static_cast<unsigned int>(
+					(std::fmod(magnitude, double(sampleRate)) / sampleRate) * turn);
+				const double fraction = double(ticks) * tickScale;
+				const double width = whole + fraction;
+				f = float(ticks) * tickScale;
+				inverseStep = float(1 / width);
+				gain = float(fraction / width);
+				return ticks;
+			}
+			#pragma float_control(pop)
 			/// @cond
 			struct Osm : public Oscillator {
 				const float _Duty;
-
-				Osm(OSM::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) { osm.setDuty(_Duty); }
-
-				void set(param frequency) {
+				KLANG_OSM_INLINE Osm(OSM::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) {
+					osm.setDuty(duty);
 					osm.set(frequency);
 				}
-
-				void set(param frequency, param phase) {
-					osm.set(frequency, phase);
+				using Oscillator::set;
+				KLANG_OSM_INLINE void set(param hz) override {
+					if (frequency != hz || osm.sampleRate != fs.f) {
+						Oscillator::frequency = hz;
+						osm.set(hz);
+					}
 				}
-
-				void set(param frequency, param phase, param duty) {
-					osm.set(frequency, phase, duty);
+				KLANG_OSM_INLINE void set(param hz, param phase) override {
+					Oscillator::frequency = hz;
+					Oscillator::position = phase;
+					Oscillator::offset = 0;
+					osm.set(hz, phase);
 				}
-
-				void process() {
-					out = osm.output();
+				KLANG_OSM_INLINE void set(param hz, param phase, param duty) override {
+					set(hz, phase);
+					setDuty(duty);
 				}
+				KLANG_OSM_INLINE void set(param hz, relative phase) override {
+					set(hz);
+					set(phase);
+				}
+				KLANG_OSM_INLINE void set(relative phase) override {
+					Oscillator::offset = phase * twoPi;
+					osm.setOffset(Oscillator::offset);
+				}
+				KLANG_OSM_INLINE void setDuty(param duty) { osm.setDuty(duty); }
+				KLANG_OSM_INLINE void reset() override {
+					Oscillator::position = 0;
+					osm.reset();
+				}
+				KLANG_OSM_INLINE void process() override { out = osm.output(); }
 
 			protected:
-				using Oscillator::set;
 				OSM osm;
 			};
 			/// @endcond
 
-			/// Saw wave oscillator (band-limited, optimised)
-			struct Saw : public Osm { Saw() : Osm(&OSM::saw, 0.f) {} };
-			/// Triangle wave oscillator (band-limited, optimised)
-			struct Triangle : public Osm { Triangle() : Osm(&OSM::saw, 1.f) {} };
-			/// Square wave oscillator (band-limited, optimised)
-			struct Square : public Osm { Square() : Osm(&OSM::pulse, 1.0f) {} };
-			/// Pulse wave oscillator (band-limited, optimised)
-			struct Pulse : public Osm { Pulse() : Osm(&OSM::pulse, 0.5f) {} };
+			/// Descending saw, averaged over each sample interval.
+			struct Saw : public Osm {
+				KLANG_OSM_INLINE Saw() : Osm(&OSM::saw, 0.f) {}
+				KLANG_OSM_INLINE void process() override { out = osm.saw(); }
+			};
+			/// Triangle with equal rising and falling half-cycles, sample-averaged.
+			struct Triangle : public Osm {
+				KLANG_OSM_INLINE Triangle() : Osm(&OSM::saw, 0.5f) {}
+				KLANG_OSM_INLINE void process() override { out = osm.saw(); }
+			};
+			/// Square with 50% high duty, sample-averaged.
+			struct Square : public Osm {
+				KLANG_OSM_INLINE Square() : Osm(&OSM::pulse, 0.5f) {}
+				KLANG_OSM_INLINE void process() override { out = osm.pulse(); }
+			};
+			/// Pulse with configurable high duty in [0,1], sample-averaged.
+			struct Pulse : public Osm {
+				KLANG_OSM_INLINE Pulse() : Osm(&OSM::pulse, 0.5f) {}
+				KLANG_OSM_INLINE void process() override { out = osm.pulse(); }
+			};
+
+#undef KLANG_OSM_INLINE
+			/// Aliased 0-to-1 ramp using an integer wrapping phase.
+			struct Phasor : Oscillator {
+				Phasor() { set(frequency); }
+
+				void reset() override {
+					Phasor::position = Oscillator::position = 0;
+				}
+
+				void set(param frequency) override {
+					if (frequency != Oscillator::frequency || sampleRate != double(fs)) {
+						sampleRate = fs;
+						Oscillator::frequency = frequency;
+						increment.set(frequency);
+					}
+				}
+
+				void set(param frequency, param phase) override {
+					Phasor::position = Oscillator::position = phase;
+					set(frequency);
+				}
+
+				void set(param frequency, relative phase) override {
+					set(frequency);
+					set(phase);
+				}
+
+				void set(relative phase) override {
+					Phasor::offset = Oscillator::offset = phase * twoPi;
+				}
+
+				void process() override {
+					Fast::Phase phase = position;
+					phase.position += offset.position;
+					out = float(phase);
+					position += increment;
+				}
+
+			protected:
+				double sampleRate = 0;
+				Fast::Increment increment;
+				Fast::Phase position, offset;
+			};
 
 			/// White noise generator (optimised)
 			struct Noise : public Generator {
@@ -4470,21 +6162,83 @@ namespace klang {
 	/// Common audio filters.
 	namespace Filters {
 
-		//		namespace Basic {
+		/// Simple DC filter / blocker
+		struct DCF : public Modifier {
+			float r = 0.995f; // Decay factor (adjustable)
+			float z = 0;	  // Filter state (last input)
 
-					/// Basic one-pole IIR filter.
+			void set(param r) override { this->r = r; }
+
+			void process() {
+				out = in - z + r * out;
+				z = in;
+			}
+		};
+
+		/// IIR filter for specified order
+		template<int ORDER>
 		struct IIR : public Modifier {
 			virtual ~IIR() {}
 
-			float a, b;
+			float a[ORDER] = { }; // Feedback coefficients (a1, a2, ..., aN)
+			float y[ORDER] = { }; // Previous outputs (y[n-1], y[n-2], ..., y[n-N])
 
-			void set(param coeff) {
-				a = coeff;
-				b = 1 - a;
+			template <typename... Coeffs>
+			void set(Coeffs... coeffs) {
+				static_assert(sizeof...(coeffs) == ORDER, "Incorrect number of coefficients.");
+				_set<0>(coeffs...);
 			}
 
 			void process() {
-				out = (a * in) + (b * out);
+				out = in;
+				for (size_t i = 0; i < ORDER; ++i)
+					out -= a[i] * y[i];
+
+				for (size_t i = ORDER - 1; i > 0; --i)
+					y[i] = y[i - 1];
+				y[0] = out;
+			}
+
+		protected:
+			// Helper function to unpack variadic arguments into a[]
+			template <size_t index, typename First, typename... Rest>
+			void _set(First first, Rest... rest) {
+				a[index] = first;
+				if constexpr (index + 1 < ORDER)
+					_set<index + 1>(rest...);
+			}
+		};
+
+		// optimised first-order IIR
+		template <>
+		struct IIR<1> : public Modifier {
+			virtual ~IIR() {}
+
+			float a = 1, b = 0; // Feedback coefficients (a1, a2)
+
+			void set(param coeff) {
+				a = coeff;
+				b = 1.f - a;
+			}
+
+			void process() {
+				out = in * a + out * b;
+			}
+
+			/// Compute the phase offset in seconds at a given frequency
+			float phase(float f) const {
+				float omega = 2.0f * pi.f * f / fs.f;
+				float cos_w = cosf(omega);
+				float sin_w = sinf(omega);
+
+				return atan2(b * sin_w, 1.f - b * cos_w) / (2.0f * pi.f * f); // Convert to seconds
+			}
+
+			/// Compute the group delay in samples at a given frequency
+			float delay(float f) const {
+				const float omega = 2.0f * pi.f * f / fs.f;
+				const float cos_w = cosf(omega);
+				return (1.f - a * a) / (1.f - 2.f * a * cos_w + a * a);
 			}
 		};
 
@@ -4515,7 +6269,6 @@ namespace klang {
 				void set(param f) {
 					if (Filter::f != f) {
 						Filter::f = f;
-						//tan0 = tanf(0.5f * f * fs.w);
 						init();
 					}
 				}
@@ -4524,6 +6277,7 @@ namespace klang {
 
 				void process() {
 					out = b0 * in + b1 * z + a1 * out + DENORMALISE;
+					z = in;
 				}
 			};
 
@@ -4540,6 +6294,19 @@ namespace klang {
 				void process() {
 					out = b0 * in + a1 * out + DENORMALISE;
 				}
+
+				/// Compute the phase delay in seconds at a given frequency
+				float phase(float f) const {
+					float omega = 2.0f * pi.f * f / fs.f;
+					float cos_w = cosf(omega);
+					float sin_w = sinf(omega);
+
+					float real = b0 - a1 * cos_w;
+					float imag = -a1 * sin_w;
+
+					float phaseRadians = atan2f(imag, real);
+					return phaseRadians / (2.0f * pi.f * f); // Convert to seconds
+				}
 			};
 
 			/// High-pass filter (HPF)
@@ -4551,25 +6318,6 @@ namespace klang {
 					b0 = 0.5f * (1.f + exp0);
 					b1 = -b0;
 					a1 = exp0;
-				}
-			};
-		};
-
-		/// One-pole Butterworth filter.
-		namespace Butterworth {
-			/// Low-pass filter (LPF).
-			struct LPF : OnePole::Filter {
-				virtual ~LPF() {}
-
-				void init() {
-					const float c = 1.f / tanf(pi * f * fs.inv);
-					constant a0 = { 1.f + c };
-					b0 = a0.inv;  // b0 == b1
-					a1 = (1.f - c) * a0.inv; // = (1-c) / a0
-				}
-				void process() {
-					out = b0 * (in + z) - a1 * out;// +DENORMALISE;
-					z = in;
 				}
 			};
 		};
@@ -4603,7 +6351,13 @@ namespace klang {
 				}
 
 				/// Set the filter cutoff (default Q)
-				void set(param f) { set(f, root2.inv); }
+				void set(param f) { this->set(f, root2.inv); }
+
+				/// Set the filter cutoff and bandwidth
+				void set(param f, relative bw) {
+					if (bw > 0)
+						this->set(f, param(f / bw));
+				}
 
 				/// Set the filter cutoff and Q
 				void set(param f, param Q) {
@@ -4620,7 +6374,7 @@ namespace klang {
 
 						if (Q < 0.5) Q = 0.5;
 						a = sin0 / (2.f * Q);
-						init();
+						this->init();
 					}
 				}
 
@@ -4634,6 +6388,45 @@ namespace klang {
 					z[0] = b1 * in - a1 * y + z1;
 					z[1] = b2 * in - a2 * y;
 					out = y;
+				}
+
+				/// Return the phase offset for the specified frequency (in seconds)
+				float phase(float f) const
+				{
+					float omega = 2.0f * pi.f * f / fs.f;
+					float cos_w = std::cos(omega);
+					float sin_w = std::sin(omega);
+
+					float real = b0 + b1 * cos_w + b2 * cos(2 * omega);// -(a1 * cos_w + a2 * cos(2 * omega));
+					float imag =      b1 * sin_w + b2 * sin(2 * omega);// -(a1 * sin_w + a2 * sin(2 * omega));
+					float phaseRadians = std::atan2(-imag, real);
+
+					real = 1 + (a1 * cos_w + a2 * cos(2 * omega));
+					imag = (a1 * sin_w + a2 * sin(2 * omega));
+
+					phaseRadians -= std::atan2(-imag, real);
+					return phaseRadians / (2.0f * pi.f * f); // Convert to seconds
+				}
+
+				/// Return the group delay for the specified frequency (in samples)
+				float delay(float f) const
+				{
+					float omega = 2.0f * pi.f * f / fs.f;
+					float cos_w = std::cos(omega);
+					float sin_w = std::sin(omega);
+
+					// Compute transfer function components
+					float R = b0 + b1 * cos_w + b2 * cos(2 * omega) - (a1 * cos_w + a2 * cos(2 * omega));
+					float I =      b1 * sin_w + b2 * sin(2 * omega) - (a1 * sin_w + a2 * sin(2 * omega));
+
+					// Compute phase response
+					//float phaseRadians = std::atan2(I, R);
+
+					// Compute the derivative of phase (group delay)
+					float dR_dOmega = -b1 * sin_w - 2 * b2 * sin(2 * omega) + a1 * sin_w + 2 * a2 * sin(2 * omega);
+					float dI_dOmega =  b1 * cos_w + 2 * b2 * cos(2 * omega) - a1 * cos_w - 2 * a2 * cos(2 * omega);
+
+					return (R * dI_dOmega - I * dR_dOmega) / (R * R + I * I);
 				}
 			};
 
@@ -4729,16 +6522,120 @@ namespace klang {
 
 			/// All-pass filter (APF)
 			struct APF : Filter {
+				param r = 1.f;
+
+				/// Set the filter cutoff (default r)
+				void set(param f) { this->set(f, 1.f); }
+
+				/// Set the pole frequency and radius (r)
+				void set(param f, param r) {
+					if (Filter::f != f || a != r) {
+						Filter::f = f;
+						a = r;
+
+						const float w = f * fs.w;
+						cos0 = cosf(w);
+						sin0 = sinf(w);
+
+						init();
+					}
+				}
+
 				void init() {
-					constant a0 = { 1.f + a };
-					b1 = a1 = a0.inv * (-2.f * cos0);
-					b0 = a2 = a0.inv * (1.f - a);
+					float omega = 2.0f * pi * f / fs;
+					float cos0 = cos(omega);
+
+					b0 = a2 = a * a;
+					b1 = a1 = (-2.f * a * cos0);
 					b2 = 1.f;
 				}
 			};
 		}
 		//		}
+
+		/// One-pole Butterworth filter.
+		namespace Butterworth {
+			/// Low-pass filter (LPF).
+			template<int ORDER>
+			struct LPF : OnePole::Filter {
+				virtual ~LPF() {}
+			};
+
+			template<>
+			struct LPF<1> : OnePole::Filter {
+				virtual ~LPF() {}
+
+				void init() {
+					const float c = 1.f / tanf(pi * f * fs.inv);
+					constant a0 = { 1.f + c };
+					b0 = a0.inv;  // b0 == b1
+					a1 = (1.f - c) * a0.inv; // = (1-c) / a0
+				}
+				void process() {
+					out = b0 * (in + z) - a1 * out;// +DENORMALISE;
+					z = in;
+				}
+			};
+
+			template<>
+			struct LPF<2> : Biquad::Filter {
+				void init() {
+					constant a0 = { 1.f + a };
+					b0 = a0.inv * ((1.f - cos0) / 2.f);
+					b1 = a0.inv * (1.f - cos0);
+					b2 = a0.inv * ((1.f - cos0) / 2.f);
+					a1 = a0.inv * ( - 2.f * cos0);
+					a2 = a0.inv * (1.f - a);
+				}
+			};
+		};
 	}
+
+	/// Common audio modifiers.
+	namespace Modifiers {
+		/// Modal resonator
+		struct Modal : public Modifier {
+			float a1 = 0, a2 = 0;
+			float y1 = 0, y2 = 0;
+
+			float gain = 0.05f;
+
+			// initialise the resonator
+			void set(param f, param decay, param gain) {
+				set(f, decay);
+				this->gain = std::clamp(gain.value * 0.05f, -0.05f, 0.05f);
+			}
+
+			void set(param f, param decay) {
+				gain = 0.05f;
+
+				constexpr float min_d = 1e-6f;  // Prevents underflow
+				constexpr float max_d = 0.9999f;  // Ensures stability
+
+				const float w = f.value * fs.w;
+				const float d = std::clamp(std::exp(-pi / (decay * fs)), min_d, max_d);
+
+				a1 = 2.f * d * std::clamp(std::cos(w), -0.9999f, 0.9999f);
+				a2 = -d * d;
+
+				y2 = 0;
+				y1 = 0;
+				in = 0;
+				out = 0;
+			}
+
+			void input() {
+				in *= gain;
+			}
+
+			void process() {
+				out = in + a1 * y1 + a2 * y2;
+				y2 = y1;
+				y1 = out;
+				in = 0;
+			}
+		};
+	};
 
 	/// Envelope follower (Peak / RMS)
 	struct Envelope::Follower : Modifier {
@@ -4825,15 +6722,201 @@ namespace klang {
 				sum += double(buffer++);
 				if (buffer.finished())
 					buffer.rewind();
-				sum* window.inv >> sqrt >> ar >> out;
+				signal(sum * window.inv) >> sqrt >> ar >> out;
 			}
 		};
+	};
+
+	struct File {
+#if defined(_MSC_VER) && !defined(__clang__)
+#define packed __pragma(pack(push,1)) struct __pragma(pack(pop))
+#else
+#define packed struct __attribute__((packed))
+#endif
+		struct Format {
+			unsigned int channels = 0;
+			unsigned int samplerate = 0;
+			unsigned int bitrate = 0;
+		};
+
+		packed Chunk{
+			struct ID {
+				char id[4] = { 0 };
+				ID() = default;
+				ID(const char* id) : id{ id[0], id[1], id[2], id[3] } {}
+				bool operator==(const ID& id) const {
+					return memcmp(ID::id, id.id, 4) == 0;
+				}
+				bool operator==(const char* const id) const {
+					return memcmp(ID::id, id, 4) == 0;
+				}
+			} id;
+			unsigned int size = 0;
+
+			Chunk() = default;
+			Chunk(ID id, unsigned int size = 0) : id(id), size(size) {}
+		};
+
+		packed Header : Chunk{
+			ID format;
+
+			Header() = default;
+			Header(ID id, ID format, unsigned int size = 0) : Chunk(id, size), format(format) {}
+
+			bool isWAV()  const { return id == "RIFF" && format == "WAVE"; }
+			bool isAIFF() const { return id == "FORM" && format == "AIFF"; }
+		};
+
+		packed WAV{
+			Memory memory;
+
+			packed Header : File::Header {
+				Header() : File::Header("RIFF", "WAVE") {}
+			} *header = nullptr;
+
+			packed Format : Chunk {
+				unsigned short AudioFormat;
+				unsigned short NumChannels;
+				unsigned int   SampleRate;
+				unsigned int   ByteRate;
+				unsigned short BlockAlign;
+				unsigned short BitsPerSample;
+
+				Format() : Chunk("fmt ", sizeof(Format)) {}
+
+				operator File::Format() const { return { NumChannels, SampleRate, BitsPerSample }; }
+			} *format = nullptr;
+
+			packed Data : Chunk {
+				unsigned char data[1] = { 0 };
+
+				Data() : Chunk("data") {}
+			} *data = nullptr;
+
+			// use internal memory
+			bool load(const char* path) {
+				memory.load(path);
+				return load();
+			}
+
+			// use external memory
+			bool load(Memory& memory) {
+				WAV::memory = &memory;
+				return load();
+			}
+
+			bool load() {
+				if (!memory.ptr)
+					return false;
+				memory.rewind();
+
+				// header
+				header = (Header*)memory.ptr;
+				if (!header->isWAV())
+					return false;
+				memory.skip(sizeof(Header));
+
+				// other chunks
+				while (!memory.finished()) {
+					const Chunk chunk = memory;
+					memory.rewind(sizeof(Chunk));
+					if (chunk.id == "fmt ")
+						format = (Format*)memory.ptr;
+					else if (chunk.id == "data") {
+						if (memory.ptr + chunk.size > memory.end)
+							return false; // corrupt
+						data = (Data*)memory.ptr;
+					}
+					memory.skip(sizeof(Chunk) + chunk.size);
+				}
+				return true;
+			}
+
+			template<typename TYPE, int STEP = 1>
+			inline static void decode(float* buffer, const TYPE* data, int length) {
+				if constexpr (std::is_floating_point<TYPE>::value) {
+					while (length--) {
+						*buffer++ = *data;
+						data += STEP;
+					}
+				} else {
+					constexpr unsigned int twoComp = 1U << (sizeof(TYPE) * 8 - 1);
+					if constexpr (std::numeric_limits<TYPE>::is_signed) {
+						constexpr float scale = 1.f / twoComp;
+						while (length--) {
+							*buffer++ = static_cast<float>(*data) * scale;
+							data += STEP;
+						}
+					} else {
+						constexpr float scale = 1.f / ((twoComp << 1) - 1);
+						while (length--) {
+							*buffer++ = (static_cast<float>(*data) - twoComp) * scale;
+							data += STEP;
+						}
+					}
+				}
+			}
+
+			bool operator>>(variable::buffer& buffer) {
+				if (!header || !format || !data)
+					return false;
+
+				buffer.resize(data->size / format->BlockAlign);
+				if (format->AudioFormat == 1) {	// PCM (integer)
+					if (format->BitsPerSample == 8)
+						decode<unsigned char>(buffer.data(), (unsigned char*)data->data, buffer.size); // 8-bit (unsigned)
+					else if(format->BitsPerSample == 16)
+						decode<signed short>(buffer.data(), (signed short*)data->data, buffer.size); // 16-bit (signed)
+					else if(format->BitsPerSample == 32)
+						decode<signed int>(buffer.data(), (signed int*)data->data, buffer.size); // 32-bit (signed)
+				} else if (format->AudioFormat == 3) {
+					if(format->BitsPerSample == 32)
+						decode<float>(buffer.data(), (float*)data->data, buffer.size); // 32-bit (float)
+				}
+				return true;
+			}
+		};
+
+		//struct AIFF {
+		//	struct Binary Extended {
+		//		unsigned short exponent;	  // 15-bit exponent + sign bit
+		//		unsigned long long mantissa;  // 64-bit mantissa
+		//
+		//		operator double() const {
+		//			uint16_t exp = (exponent >> 8) | (exponent << 8); // Swap bytes (big-endian to host)
+		//			const bool sign = exp & 0x8000;		// Extract sign bit
+		//			exp &= 0x7FFF;						// Remove sign bit
+		//
+		//			uint64_t mant = __builtin_bswap64(mantissa); // Convert mantissa (big-endian to host)
+		//			if (exp == 0 && mant == 0) return 0.0; // Handle zero case
+		//
+		//			double fraction = static_cast<double>(mant) / (1ULL << 63); // normalize mantissa (hidden bit)
+		//			return (sign ? -fraction : fraction) * std::pow(2.0, exp - 16383);
+		//		}
+		//	};
+		//
+		//	struct Binary Header : File::Header {
+		//		Header() : File::Header("FORM", "AIFF") {}
+		//	};
+		//
+		//	struct Binary Format : Chunk {
+		//		unsigned short numChannels;
+		//		unsigned int   numSamplesFrames;
+		//		unsigned short sampleSize;
+		//		Extended	   sampleRate;
+		//
+		//		Format() : Chunk("COMM ", sizeof(Format)) { }
+		//
+		//		operator File::Format() const { return { numChannels, sampleRate, sampleSize }; }
+		//	};
+		//};
 	};
 
 	namespace basic {
 		using namespace klang;
 
 		using namespace Generators::Basic;
+		using namespace Modifiers;
 		using namespace Filters;
 		using namespace Filters::Biquad;
 	};
@@ -4842,6 +6925,7 @@ namespace klang {
 		using namespace klang;
 
 		using namespace Generators::Fast;
+		using namespace Modifiers;
 		using namespace Filters;
 		using namespace Filters::Biquad;
 	};
@@ -4852,5 +6936,10 @@ namespace klang {
 
 	//using namespace optimised;
 };
+
+#if defined(KLANG_WARNING_SCOPE)
+#pragma warning(pop)
+#undef KLANG_WARNING_SCOPE
+#endif
 
 //using namespace klang;

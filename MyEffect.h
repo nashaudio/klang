@@ -17,7 +17,7 @@ class MyEffect : public MiniPlugin::Effect
 {
 public:
     MyEffect();     // constructor (initialise variables, etc.)
-    virtual ~MyEffect();    // destructor (clean up, free memory, etc.)
+    ~MyEffect();    // destructor (clean up, free memory, etc.)
 
     void setSampleRate(float sampleRate){ stk::Stk::setSampleRate(sampleRate); }
     float getSampleRate() const { return stk::Stk::sampleRate(); };
@@ -30,6 +30,4 @@ public:
 
 private:
     // Declare shared member variables here
-    Noise noise;
-	Sine lfo;
 };

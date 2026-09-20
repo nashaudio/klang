@@ -6,7 +6,7 @@ float cubic(float x) { return x * x * x; }
 
 struct Banjo : Synth {
 	float playingNotes = 0;
-	IIR filter;
+	IIR<1> filter;
 	HPF dcfilter;
 	const float normalise;
 	
@@ -20,18 +20,18 @@ struct Banjo : Synth {
 			Noise noise;
 			
 			void process() {
-				const signal exc = impulse++ * noise;
+				const signal exc = impulse * noise;
 				exc - (exc >> delay) >> out;
 			}
 		} pluck;
 			
 		struct Resonator : Modifier {
 			Delay<44100> delay;
-			IIR filter;
+			IIR<1> filter;
 			param gain;
 			
 			void process() {
-				(in + delay * gain) >> filter  >> out >> delay;
+				(in + delay * gain) >> filter >> out >> delay;
 			}
 		} string;
 		
@@ -109,7 +109,7 @@ struct Banjo : Synth {
 			
 			((excitation >> string) + (excitation >> string2)) * 0.5 >> out;
 					
-			out *= 0.3; adsr++;
+			out *= 0.3; adsr;
 			if(adsr.finished())
 				stop();
 		}
