@@ -1,3 +1,4 @@
+#define KLANG_CONTROL_REFERENCES 1
 #ifdef abs
 #undef abs
 #endif
@@ -21,11 +22,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <cmath>
+#if defined(__WAJIC__) && !defined(_LIBCPP_HAS_NO_LOCALIZATION)
+#pragma push_macro("_LIBCPP_HAS_NO_LOCALIZATION")
+#define _LIBCPP_HAS_NO_LOCALIZATION
+#include <complex>
+#pragma pop_macro("_LIBCPP_HAS_NO_LOCALIZATION")
+#else
+#include <complex>
+#endif
 #include <math.h>
 #include <limits>
 #include <assert.h>
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <string>
 #include <cstdarg>
@@ -39,6 +49,8 @@
 #include <float.h>
 #include <utility>
 #include <chrono>
+#include <cstdint>
+#include <stdexcept>
 
 #define HAS_KLANG 1
 
@@ -131,7 +143,7 @@ namespace klang {
 		}
 		bool below(unsigned char M, unsigned char m, unsigned char b) const { return !atLeast(M, m, b); }
 	}
-	static constexpr version = { 0, 7, 10, KLANG_DEBUG };
+	static constexpr version = { 0, 7, 15, KLANG_DEBUG };
 
 	/// Klang mode identifiers (e.g. averages, level following)
 	enum Mode { Peak, RMS, Mean };
@@ -266,10 +278,10 @@ namespace klang {
 	}
 
 	/// Return the minimum of two values.
-	template<typename TYPE1, typename TYPE2> inline TYPE1 min(TYPE1 a, TYPE2 b) { return a < b ? a : (TYPE1)b; };
+	using std::min;
 
-	/// Return the minimum of two values.
-	template<typename TYPE1, typename TYPE2> inline TYPE1 max(TYPE1 a, TYPE2 b) { return a > b ? a : (TYPE1)b; };
+	/// Return the maximum of two values.
+	using std::max;
 
 	/// The mathematical constant, pi (and it's inverse).
 	constexpr constant pi = { 3.1415926535897932384626433832795 };
@@ -1712,7 +1724,20 @@ namespace klang {
 		//INFO("Frequency", 1000.f, -FLT_MAX, FLT_MAX)
 		using param::param;
 		Frequency(float f = 1000.f) : param(f) {};
+
+		/// Convert a positive frequency in Hz to MIDI pitch.
+		const Frequency* operator->() const {
+			Pitch = 69.0 + 12.0 * std::log2(double(value) / 440.0);
+			return this;
+		}
+
+		THREAD_LOCAL static Conversion Pitch;
 	};
+
+	THREAD_LOCAL inline Conversion Frequency::Pitch;
+
+	/// Frequency in hertz.
+	using Hz = Frequency;
 
 	/// Sample rate constants
 	static struct SampleRate {
@@ -1723,7 +1748,7 @@ namespace klang {
 		float w;        ///< angular frequency (omega)
 		float nyquist;  ///< nyquist frequency (f / 2)
 
-		SampleRate(float sr) : f(sr), i(int(sr + 0.001f)), d((double)sr), inv(1.f / sr), w(2.0f * pi * inv), nyquist(sr / 2.f) {}
+		SampleRate(float sr) : f(sr), i(int(sr + 0.001f)), d((double)sr), inv(sr != 0 ? 1.f / sr : 0.f), w(2.0f * pi * inv), nyquist(sr / 2.f) {}
 
 		operator float() { return f; }
 	} fs(44100); // sample rate
@@ -1991,104 +2016,539 @@ namespace klang {
 		return { { "MOD\nWHEEL" }, Control::WHEEL, 0.f, 127.f, 0.f, size, NoOptions, 0.f };
 	}
 
-	struct Group {
-		const char* name;
-		Control::Size size;
-		std::vector<Control> controls;
+    struct Controls;
 
-		Group(const char* name, std::initializer_list<Control> controls) : name(name), size(Automatic), controls{ controls } {}
+    /// Construction-time entry: temporary controls are owned; mutable lvalues are borrowed.
+    struct ControlEntry {
+        enum Kind { Owned, Reference, Collection } kind = Owned;
+        Control owned {};
+        Control* reference = nullptr;
+        Controls* collection = nullptr;
 
-		template <typename... Controls>
-		Group(const char* name, Controls... ctrls) : name(name), size(Automatic), controls{ std::forward<Controls>(ctrls)... } {}
+        ControlEntry(Control&& control) : owned(std::move(control)) {}
+        ControlEntry(const Control& control) : owned(control) {}
+        ControlEntry(Control& control) : kind(Reference), reference(&control) {}
+        ControlEntry(Controls& controls) : kind(Collection), collection(&controls) {}
+        ControlEntry(Controls&&) = delete;
+    };
 
-		template <typename... Controls>
-		Group(Controls... ctrls) : name(""), size(Automatic), controls{ std::forward<Controls>(ctrls)... } {}
+    /// Optional presentation grouping, independent of value ownership.
+    struct Group {
+        const char* name;
+        Control::Size size;
+        std::vector<ControlEntry> controls;
 
-		Group(const char* name, Control::Size size, std::initializer_list<Control> controls) : name(name), size(size), controls{ controls } {}
+        Group(const char* name, std::initializer_list<ControlEntry> controls)
+            : name(name), size(Automatic), controls(controls) {}
+        Group(const char* name, Control::Size size, std::initializer_list<ControlEntry> controls)
+            : name(name), size(size), controls(controls) {}
+        // Typed legacy initializer_list<Control> variables remain value copies;
+        // inline braced entries keep the new lvalue/rvalue distinction.
+        template<class List, std::enable_if_t<std::is_same_v<std::decay_t<List>, std::initializer_list<Control>>, int> = 0>
+        Group(const char* name, List&& list) : name(name), size(Automatic) {
+            for (const auto& control : list) controls.emplace_back(control);
+        }
+        template<class List, std::enable_if_t<std::is_same_v<std::decay_t<List>, std::initializer_list<Control>>, int> = 0>
+        Group(const char* name, Control::Size size, List&& list) : name(name), size(size) {
+            for (const auto& control : list) controls.emplace_back(control);
+        }
+        template<class... Entries, std::enable_if_t<(std::is_constructible_v<ControlEntry, Entries&&> && ...), int> = 0>
+        Group(const char* name, Entries&&... entries)
+            : name(name), size(Automatic), controls { ControlEntry(std::forward<Entries>(entries))... } {}
+        template<class... Entries, std::enable_if_t<(std::is_constructible_v<ControlEntry, Entries&&> && ...), int> = 0>
+        Group(Entries&&... entries)
+            : name(""), size(Automatic), controls { ControlEntry(std::forward<Entries>(entries))... } {}
+        template<class... Entries, std::enable_if_t<(std::is_constructible_v<ControlEntry, Entries&&> && ...), int> = 0>
+        Group(const char* name, Control::Size size, Entries&&... entries)
+            : name(name), size(size), controls { ControlEntry(std::forward<Entries>(entries))... } {}
+        template<class... Entries, std::enable_if_t<(std::is_constructible_v<ControlEntry, Entries&&> && ...), int> = 0>
+        Group(Control::Size size, Entries&&... entries)
+            : name(""), size(size), controls { ControlEntry(std::forward<Entries>(entries))... } {}
+    };
 
-		template <typename... Controls>
-		Group(const char* name, Control::Size size, Controls... ctrls) : name(name), size(size), controls{ std::forward<Controls>(ctrls)... } {}
+    struct Preset;
 
-		template <typename... Controls>
-		Group(Control::Size size, Controls... ctrls) : name(""), size(size), controls{ std::forward<Controls>(ctrls)... } {}
-	};
+    /** An owned control collection with optional borrowed value entries.
+     * Mutable Control and Controls lvalues in a declaration borrow their values;
+     * temporary factory results are owned. Referenced schemas are fixed while
+     * borrowed. An individual borrowed Control must outlive this collection.
+     * DSP code normally continues reading the child's original Controls object.
+     * The legacy count/items/value/groups prefix and Control layout are retained;
+     * the binding sidecar is internal, never the MiniPlugin host ABI record.
+     */
+    struct Controls : Array<Control, 128> {
+        float value[128] = { 0 };
+        Array<Control::Group, 10> groups;
 
-	struct Preset;
+    private:
+        [[noreturn]] static void invalid(const char* message) {
+#if defined(__cpp_exceptions) || defined(_CPPUNWIND)
+            throw std::logic_error(message);
+#else
+            (void)message;
+            std::abort();
+#endif
+        }
+        struct Construction { std::uint64_t ordinal = 0; };
+        static const std::shared_ptr<Construction>& construction() {
+            static THREAD_LOCAL auto stream = std::make_shared<Construction>();
+            return stream;
+        }
+        struct Lifetime {
+            bool alive = true;
+            std::uint64_t birth;
+            std::shared_ptr<Construction> creator;
+            std::vector<std::shared_ptr<Lifetime>> dependencies;
+            explicit Lifetime(const std::shared_ptr<Construction>& stream) : birth(++stream->ordinal), creator(stream) {}
+        };
+        struct Alias {
+            Control* target = nullptr;
+            std::shared_ptr<Lifetime> lifetime;
+        };
+        struct Scope {
+            std::string name;
+            unsigned int start = 0, length = 0;
+        };
+        Alias aliases[128];
+        bool borrowed = false;
+        bool input[128] {};
+        unsigned int scopeIndex[128] {};
+        Scope scopes[129];
+        unsigned int scopeCount = 1;
+        std::string sourceKeys[128];
+        mutable std::string keys[128];
+        mutable bool metadataDirty = true;
+        mutable std::shared_ptr<Lifetime> lifetime;
 
-	/// Plugin UI controls
-	struct Controls : Array<Control, 128>
-	{
-		float value[128] = { 0 };
-		Array<Control::Group, 10> groups;
+        struct Registry {
+            struct Entry { Controls* owner; Control* first; const Construction* creator; };
+            std::mutex mutex;
+            std::vector<Entry> collections;
+        };
+        static Registry& registry() { static Registry value; return value; }
+        struct Origin { Alias alias; Controls* owner = nullptr; unsigned int index = 0; };
+        static Origin capture(Control& control, bool& isInput) {
+            auto& owners = registry();
+            const std::lock_guard<std::mutex> lock(owners.mutex);
+            for (const auto& entry : owners.collections) {
+                if (entry.creator != construction().get()) {
+                    // Inspect only immutable registry addresses, never another
+                    // construction stream's changing count or metadata.
+                    const auto address = reinterpret_cast<std::uintptr_t>(&control);
+                    const auto first = reinterpret_cast<std::uintptr_t>(entry.first);
+                    if (address >= first && address - first < sizeof(Control) * 128 &&
+                        (address - first) % sizeof(Control) == 0)
+                        invalid("An individual Control reference cannot cross construction threads");
+                    continue;
+                }
+                auto* owner = entry.owner;
+                for (unsigned int i = 0; i < owner->count; ++i)
+                    if (&owner->items[i] == &control) {
+                        isInput = owner->isInput(i);
+                        return { { &control, owner->token() }, owner, i };
+                    }
+            }
+            // Standalone Control lvalues use ordinary C++ reference lifetime.
+            return { { &control, {} }, nullptr, 0 };
+        }
 
-		void operator+= (const Control& control) {
-			items[count++] = control;
-		}
+        void mutableSchema() const {
+            if (lifetime && lifetime.use_count() > 1)
+                invalid("Cannot change a Controls schema while it is referenced");
+        }
+        std::shared_ptr<Lifetime> token() const {
+            return lifetime;
+        }
+        static bool live(const std::shared_ptr<Lifetime>& state) {
+            if (!state) return true;
+            if (!state->alive) return false;
+            for (const auto& dependency : state->dependencies)
+                if (!live(dependency)) return false;
+            return true;
+        }
+        static bool dependsOn(const std::shared_ptr<Lifetime>& state, const Lifetime* target) {
+            if (state.get() == target) return true;
+            for (const auto& dependency : state->dependencies)
+                if (dependsOn(dependency, target)) return true;
+            return false;
+        }
+        void pin(const std::shared_ptr<Lifetime>& source) {
+            if (!source) return;
+            if (dependsOn(source, lifetime.get())) invalid("Cyclic Controls schema reference");
+            for (const auto& dependency : lifetime->dependencies)
+                if (dependency == source) return;
+            lifetime->dependencies.push_back(source);
+        }
+        std::string childIdentity(const Controls& child, char kind) const {
+            if (child.lifetime->creator != lifetime->creator || child.lifetime->birth <= lifetime->birth)
+                return {};
+            return std::string(1, kind) + std::to_string(child.lifetime->birth - lifetime->birth);
+        }
+        void room(unsigned int entries) const {
+            if (entries > 128 - count) invalid("Controls capacity exceeded");
+        }
+        bool owns(const Control* control) const {
+            for (const auto& item : items) if (&item == control) return true;
+            return false;
+        }
+        unsigned int newScope(unsigned int length, const std::string& identity) {
+            if (scopeCount == 129) invalid("Controls reference capacity exceeded");
+            const auto index = scopeCount++;
+            const std::string base = identity.empty() ? "external:" + std::to_string(index) : identity;
+            std::string name = base;
+            unsigned int duplicate = 0;
+            bool exists = true;
+            while (exists) {
+                exists = false;
+                for (unsigned int previous = 1; previous < index; ++previous)
+                    if (scopes[previous].name == name) { exists = true; break; }
+                if (exists) name = base + "@" + std::to_string(++duplicate);
+            }
+            scopes[index] = { name, count, length };
+            return index;
+        }
+        void appendOwned(const Control& control) {
+            room(1);
+            items[count] = control;
+            aliases[count] = {};
+            input[count] = false;
+            scopeIndex[count] = 0;
+            sourceKeys[count].clear();
+            ++count;
+            metadataDirty = true;
+        }
+        void appendReference(Control& control) {
+            room(1);
+            if (owns(&control)) invalid("A Controls collection cannot reference its own storage");
+            Origin origin = capture(control, input[count]);
+            std::string identity;
+            if (origin.owner) {
+                identity = childIdentity(*origin.owner, 'v');
+                const char* localKey = origin.owner->key(origin.index);
+                if (!identity.empty() && localKey[0]) identity += std::string("/") + localKey;
+                else identity.clear();
+            } else {
+                identity = std::string("control/") + control.name.c_str();
+                // Distinct standalone controls with identical names provide no
+                // unambiguous construction identity. Do not cross-restore them.
+                bool ambiguous = false;
+                for (unsigned int i = 0; i < count; ++i)
+                    if (aliases[i].target && !aliases[i].lifetime &&
+                        std::strcmp(aliases[i].target->name.c_str(), control.name.c_str()) == 0 &&
+                        aliases[i].target != &control) {
+                        scopes[scopeIndex[i]].name = "external:" + std::to_string(scopeIndex[i]);
+                        ambiguous = true;
+                    }
+                if (ambiguous) identity.clear();
+            }
+            const auto scope = newScope(1, identity);
+            pin(origin.alias.lifetime);
+            items[count] = control; // Dense legacy metadata snapshot, not the value authority.
+            aliases[count] = std::move(origin.alias);
+            scopeIndex[count] = scope;
+            sourceKeys[count] = scopes[scope].name;
+            ++count;
+            borrowed = metadataDirty = true;
+        }
+        void appendCollection(Controls& controls) {
+            if (&controls == this) invalid("A Controls collection cannot reference itself");
+            room(controls.count);
+            const auto scope = newScope(controls.count, childIdentity(controls, 'c'));
+            pin(controls.token());
+            for (unsigned int i = 0; i < controls.count; ++i) {
+                Control& target = controls[i];
+                if (owns(&target)) invalid("Cyclic Controls reference");
+                items[count] = target;
+                aliases[count].target = &target;
+                aliases[count].lifetime = controls.token();
+                input[count] = controls.isInput(i);
+                scopeIndex[count] = scope;
+                const char* localKey = controls.key(i);
+                sourceKeys[count] = localKey[0] ? scopes[scope].name + "/" + localKey : "";
+                ++count;
+            }
+            borrowed = metadataDirty = true;
+        }
+        void append(const ControlEntry& entry) {
+            if (entry.kind == ControlEntry::Collection) appendCollection(*entry.collection);
+            else if (entry.kind == ControlEntry::Reference) appendReference(*entry.reference);
+            else appendOwned(entry.owned);
+        }
+        void refreshMetadata() const {
+            if (!metadataDirty) return;
+            for (unsigned int i = 0; i < count; ++i) {
+                if (scopeIndex[i] && (scopes[scopeIndex[i]].name.compare(0, 9, "external:") == 0 || sourceKeys[i].empty())) {
+                    keys[i].clear();
+                    continue;
+                }
+                if (!sourceKeys[i].empty()) {
+                    keys[i] = sourceKeys[i];
+                    continue;
+                }
+                std::string path = "root";
+                for (unsigned int g = 0; g < groups.count; ++g)
+                    if (groups[g].contains(i)) path += std::string("/") + groups[g].name.c_str();
+                path += std::string("/") + items[i].name.c_str();
+                unsigned int duplicate = 0;
+                for (unsigned int j = 0; j < i; ++j)
+                    if (!scopeIndex[j] && std::string(items[j].name.c_str()) == items[i].name.c_str()) {
+                        bool sameGroups = true;
+                        for (unsigned int g = 0; g < groups.count; ++g)
+                            sameGroups = sameGroups && groups[g].contains(j) == groups[g].contains(i);
+                        if (sameGroups) ++duplicate;
+                    }
+                keys[i] = path + "/" + std::to_string(duplicate);
+            }
+            bool collision[128] {};
+            for (unsigned int i = 0; i < count; ++i)
+                for (unsigned int j = i + 1; j < count; ++j)
+                    if (!keys[i].empty() && keys[i] == keys[j]) collision[i] = collision[j] = true;
+            for (unsigned int i = 0; i < count; ++i) if (collision[i]) keys[i].clear();
+            metadataDirty = false;
+        }
 
-		void operator= (const Controls& controls) {
-			for (int c = 0; c < 128 && controls[c].type != Control::NONE; c++)
-				operator+=(controls[c]);
-		}
+    public:
+        Controls() {
+            lifetime = std::make_shared<Lifetime>(construction());
+            scopes[0].name = "root";
+            auto& owners = registry();
+            const std::lock_guard<std::mutex> lock(owners.mutex);
+            owners.collections.push_back({ this, items, lifetime->creator.get() });
+        }
+        Controls(const Controls& other) : Controls() { *this = other; }
+        Controls(Controls&& other) : Controls(static_cast<const Controls&>(other)) {}
+        ~Controls() {
+            if (lifetime) lifetime->alive = false;
+            auto& owners = registry();
+            const std::lock_guard<std::mutex> lock(owners.mutex);
+            owners.collections.erase(std::remove_if(owners.collections.begin(), owners.collections.end(),
+                [this](const Registry::Entry& entry) { return entry.owner == this; }), owners.collections.end());
+        }
 
-		//void operator=(std::initializer_list<Control> controls) {
-		//	for(auto control : controls)
-		//		operator+=(control);
-		//}
+        /// Resolve one actual control; ordinary owned collections take the direct path.
+        Control& operator[](int index) {
+            if (!borrowed || !aliases[index].target) return items[index];
+            auto& alias = aliases[index];
+            if (!live(alias.lifetime))
+                invalid("Referenced Controls owner has been destroyed");
+            return *alias.target;
+        }
+        const Control& operator[](int index) const {
+            if (!borrowed || !aliases[index].target) return items[index];
+            const auto& alias = aliases[index];
+            if (!live(alias.lifetime))
+                invalid("Referenced Controls owner has been destroyed");
+            return *alias.target;
+        }
+        void clear() {
+            mutableSchema();
+            count = 0;
+            groups.clear();
+            for (auto& alias : aliases) alias = {};
+            lifetime->dependencies.clear();
+            for (auto& flag : input) flag = false;
+            for (auto& index : scopeIndex) index = 0;
+            borrowed = false;
+            scopeCount = 1;
+            metadataDirty = true;
+        }
+        // A normal copy-assignment overload also captures `controls = { child }`
+        // before initializer-list conversion. Suppress that implicit overload;
+        // ordinary lvalue/rvalue copying still uses this constrained template.
+        Controls& operator=(const Controls&) && = delete;
+        template<class Source, std::enable_if_t<std::is_same_v<std::decay_t<Source>, Controls>, int> = 0>
+        Controls& operator=(Source&& source) & {
+            const Controls& other = source;
+            if (this == &other) return *this;
+            clear();
+            for (unsigned int i = 0; i < other.count; ++i) appendOwned(other[i]);
+            groups = other.groups;
+            for (unsigned int i = 0; i < count; ++i) input[i] = other.isInput(i);
+            return *this;
+        }
+        Controls& operator=(std::initializer_list<klang::Group> declaration) {
+            mutableSchema();
+            unsigned int entries = 0, headings = 0;
+            for (const auto& group : declaration) {
+                for (const auto& entry : group.controls) {
+                    if (entry.kind == ControlEntry::Collection) {
+                        if (entry.collection == this) invalid("A Controls collection cannot reference itself");
+                        for (unsigned int i = 0; i < entry.collection->count; ++i)
+                            if (owns(&(*entry.collection)[i])) invalid("Cyclic Controls reference");
+                        entries += entry.collection->count;
+                    } else {
+                        if (entry.kind == ControlEntry::Reference && owns(entry.reference))
+                            invalid("A Controls collection cannot reference its own storage");
+                        ++entries;
+                    }
+                }
+                if (group.name && group.name[0]) ++headings;
+            }
+            if (entries > 128 || headings > 10) invalid("Controls declaration capacity exceeded");
+            clear();
+            for (const auto& group : declaration) {
+                const auto start = count;
+                for (const auto& entry : group.controls) append(entry);
+                if (group.name && group.name[0]) groups.add({ Caption::from(group.name), group.size, start, count - start });
+            }
+            metadataDirty = true;
+            return *this;
+        }
+        void operator+=(Control& control) { mutableSchema(); appendReference(control); }
+        void operator+=(const Control& control) { mutableSchema(); appendOwned(control); }
+        void operator+=(Control&& control) { mutableSchema(); appendOwned(control); }
+        void operator+=(Controls& controls) { mutableSchema(); appendCollection(controls); }
+        void add(const Control& control) { mutableSchema(); appendOwned(control); }
+        Control* add() {
+            mutableSchema();
+            if (count == 128) return nullptr;
+            appendOwned(Control{});
+            return &items[count - 1];
+        }
+        void add(const char* name, Control::Type type = Control::ROTARY, float min = 0.f,
+                 float max = 1.f, float initial = 0.f, Control::Size size = Automatic) {
+            mutableSchema();
+            Control control {};
+            control.name = name; control.type = type;
+            control.min = min; control.max = max; control.initial = initial;
+            control.size = size; control.value = initial;
+            appendOwned(control);
+        }
+        void add(const char* name, Control::Type type, std::initializer_list<const char*> options,
+                 Control::Size size = Automatic) {
+            mutableSchema();
+            room(1);
+            if (options.size() > 128) invalid("Control options capacity exceeded");
+            Control control {};
+            control.name = name; control.type = type;
+            control.min = 0; control.max = static_cast<float>(options.size()) - 1;
+            control.initial = 0; control.value = 0; control.size = size;
+            for (const char* option : options) control.options.add(Caption::from(option));
+            appendOwned(control);
+        }
+        bool inGroup(int index) const {
+            for (unsigned int group = 0; group < groups.count; ++group)
+                if (groups[group].contains(index)) return true;
+            return false;
+        }
+        const Control::Group* getGroup(int index) const {
+            for (unsigned int group = 0; group < groups.count; ++group)
+                if (groups[group].contains(index)) return &groups[group];
+            return nullptr;
+        }
+        bool changed() {
+            bool result = false;
+            for (unsigned int i = 0; i < count; ++i) {
+                const float current = (*this)[i];
+                if (current != value[i]) { value[i] = current; result = true; }
+            }
+            return result;
+        }
+        float max() const {
+            float result = 0;
+            for (unsigned int i = 0; i < count; ++i) result = std::max(result, std::abs(float((*this)[i])));
+            return result;
+        }
+        float mean() const {
+            float result = 0;
+            for (unsigned int i = 0; i < count; ++i) result += std::abs(float((*this)[i]));
+            return result / count;
+        }
+        float rms() const {
+            float result = 0;
+            for (unsigned int i = 0; i < count; ++i) { const float sample = (*this)[i]; result += sample * sample; }
+            return std::sqrt(result / count);
+        }
+        void normalise(float target = 1, int mode = Peak) {
+            if (!count) return;
+            const float current = mode == Peak ? max() : mode == Mean ? mean() : rms();
+            const float scale = current == 0 ? 0 : target / current;
+            for (unsigned int i = 0; i < count; ++i) {
+                bool duplicate = false;
+                if (borrowed) for (unsigned int previous = 0; previous < i; ++previous)
+                    duplicate = duplicate || &(*this)[previous] == &(*this)[i];
+                if (!duplicate) (*this)[i] *= scale;
+            }
+        }
+        void group(const char* name, unsigned int start, unsigned int length, Control::Size size = Automatic) {
+            mutableSchema();
+            if (groups.count == 10 || start > count || length > count - start)
+                invalid("Invalid Controls group");
+            groups.add({ Caption::from(name), size, start, length });
+            metadataDirty = true;
+        }
+        template<class... Args> void set(Args... args) {
+            static_assert((std::is_arithmetic_v<Args> && ...), "Controls::set() accepts scalar arguments");
+            const float values[] = { static_cast<float>(args)... };
+            const unsigned int n = std::min(count, static_cast<unsigned int>(sizeof...(Args)));
+            for (unsigned int i = 0; i < n; ++i) (*this)[i].set(values[i]);
+        }
+        void set(const Preset& preset);
+        Controls& operator=(const Preset& preset);
 
-		void operator=(std::initializer_list<klang::Group> controls) {
-			for (auto group : controls) {
-				if (group.name && group.name[0])
-					groups.add({ Caption::from(group.name), group.size, count, (unsigned int)group.controls.size() });
-				for (auto control : group.controls)
-					operator+=(control);
-			}
-		}
+        /// Stable declaration key for metadata/retention; never a pointer or a default value.
+        const char* key(int index) const { refreshMetadata(); return keys[index].c_str(); }
+        const char* scope(int index) const { return scopes[scopeIndex[index]].name.c_str(); }
+        int scopeStart(int index) const { return scopeIndex[index] ? static_cast<int>(scopes[scopeIndex[index]].start) : 0; }
+        int scopeSize(int index) const { return scopeIndex[index] ? static_cast<int>(scopes[scopeIndex[index]].length) : static_cast<int>(count); }
+        bool isInput(int index) const { return input[index]; }
+        void markInput(int index, bool state = true) {
+            if (index < 0 || index >= static_cast<int>(count)) return;
+            mutableSchema();
+            const Control* target = &(*this)[index];
+            for (unsigned int i = 0; i < count; ++i)
+                if (&(*this)[i] == target) input[i] = state;
+        }
+        bool hasReferences() const { return borrowed; }
 
-		void add(const char* name, Control::Type type = Control::ROTARY, float min = 0.f, float max = 1.f, float initial = 0.f, Control::Size size = Automatic) {
-			items[count].name = name;
-			items[count].type = type;
-			items[count].min = min;
-			items[count].max = max;
-			items[count].initial = initial;
-			items[count].size = size;
-			items[count++].value = initial;
-		}
+        /// Preserve original identities when a proxy reconstructs a flat schema.
+        void setMetadata(int index, const char* identity, const char* block, int start, int length, bool gameInput) {
+            mutableSchema();
+            if (index < 0 || index >= static_cast<int>(count) || !identity ||
+                !block || !block[0] || start < 0 || length <= 0 || start > index ||
+                index >= start + length || start + length > static_cast<int>(count))
+                invalid("Invalid Controls metadata");
+            unsigned int scope = 0;
+            std::string scopeName = !identity[0] && std::strcmp(block, "root") == 0
+                ? "external:metadata" + std::to_string(index) : block;
+            if (scopeName != "root") {
+                for (scope = 1; scope < scopeCount && scopes[scope].name != scopeName; ++scope) {}
+                if (scope == scopeCount) {
+                    if (scopeCount == 129) invalid("Controls scope capacity exceeded");
+                    ++scopeCount;
+                }
+                scopes[scope] = { scopeName, static_cast<unsigned int>(start), static_cast<unsigned int>(length) };
+            }
+            scopeIndex[index] = scope;
+            sourceKeys[index] = identity;
+            markInput(index, gameInput);
+            metadataDirty = true;
+        }
 
-		bool changed() {
-			bool changed = false;
-			for (unsigned int c = 0; c < count; c++) {
-				if (items[c].value != value[c]) {
-					value[c] = items[c].value;
-					changed = true;
-				}
-			}
-			return changed;
-		}
+        /// Reconstruct an earlier canonical slot when a proxy flattens aliases.
+        void bindAlias(int index, int canonicalIndex) {
+            mutableSchema();
+            if (index <= 0 || index >= static_cast<int>(count) || canonicalIndex < 0 || canonicalIndex >= index)
+                invalid("Invalid proxy control alias");
+            Control* target = &(*this)[canonicalIndex];
+            const auto state = aliases[canonicalIndex].lifetime;
+            items[index] = *target;
+            aliases[index] = { target, state };
+            pin(state); // Null for this collection's own canonical storage.
+            borrowed = true;
+            markInput(canonicalIndex, input[canonicalIndex]);
+            metadataDirty = true;
+        }
 
-		void group(const char* name, unsigned int start, unsigned int length, Control::Size size = Automatic) {
-			const Control::Group g = { Caption::from(name), size, start, length };
-			groups.add(g);
-		}
+        /// Refresh only the legacy contiguous metadata/value snapshot before raw ABI export.
+        const Control* snapshot() {
+            for (unsigned int i = 0; i < count; ++i)
+                if (aliases[i].target) items[i] = (*this)[i];
+            return items;
+        }
+        const Control* snapshot() const { return const_cast<Controls*>(this)->snapshot(); }
+    };
 
-		template<typename... ARGS>
-		void set(ARGS... args) {
-			static_assert((std::is_arithmetic<ARGS>::value && ...), "Control::set() only accepts scalar arguments");
-
-			const int nbParams = sizeof...(args);
-			const float params[] = { static_cast<float>(args)... };
-
-			for(unsigned int p = 0; p < nbParams && p < count; p++)
-				operator[](p).set(params[p]);
-		}
-
-		void set(Preset& preset);
-
-		//float& operator[](int index) { return items[index].value; }
-		//signal operator[](int index) const { return items[index].value; }
-
-		//Control& operator()(int index) { return items[index]; }
-		//Control operator()(int index) const { return items[index]; }
-	};
 
 	typedef Array<float, 128> Values;
 
@@ -2098,9 +2558,14 @@ namespace klang {
 		Values values;
 	};
 
-	inline void Controls::set(Preset& preset) {
+	inline void Controls::set(const Preset& preset) {
 		for (unsigned int p = 0; p < preset.values.count && p < count; p++)
-			operator[](p).set(preset.values[p]);
+			if (!isInput(p)) operator[](p).set(preset.values[p]);
+	}
+
+	inline Controls& Controls::operator=(const Preset& preset) {
+		set(preset);
+		return *this;
 	}
 
 	//template<typename... Settings>
@@ -2499,7 +2964,8 @@ namespace klang {
 			virtual const SIGNAL& output() const { return out; }
 
 			// pass output to destination (with processing)
-			template<typename TYPE>
+			template<typename TYPE, class = decltype(
+				std::declval<TYPE&>() = std::declval<SIGNAL&>())>
 			TYPE& operator>>(TYPE& destination) { this->process(); return destination = out; }
 
 			// returns output (with processing)
@@ -2530,22 +2996,44 @@ namespace klang {
 		template<typename SIGNAL> inline SIGNAL operator-(float other, Output<SIGNAL>& output) { return SIGNAL(other) - SIGNAL(output); }
 		template<typename SIGNAL> inline SIGNAL operator/(float other, Output<SIGNAL>& output) { return SIGNAL(other) / SIGNAL(output); }
 
-		// Supply scalar temporaries without competing with lvalue member arithmetic
+		// Supply scalar and matching signal temporaries without competing with lvalue arithmetic
 		// or Function's existing implicit float conversion. Keep the float DSP path.
 		template<typename OBJECT> using OutputSignal = std::decay_t<decltype(std::declval<OBJECT&>().out)>;
 		template<typename OBJECT, typename SCALAR> using ScalarOutput = std::enable_if_t<
-			std::is_arithmetic_v<SCALAR> && !std::is_const_v<OBJECT> &&
+			(std::is_arithmetic_v<SCALAR> ||
+			 (std::is_same_v<std::decay_t<SCALAR>, OutputSignal<OBJECT>> &&
+			  !std::is_lvalue_reference_v<SCALAR>)) && !std::is_const_v<OBJECT> &&
 			std::is_base_of_v<Output<OutputSignal<OBJECT>>, OBJECT> &&
 			!std::is_convertible_v<OBJECT&, float>, OutputSignal<OBJECT>>;
 
 		template<typename OBJECT, typename SCALAR>
-		inline ScalarOutput<OBJECT, SCALAR> operator+(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) + float(other); }
+		inline ScalarOutput<OBJECT, SCALAR> operator+(OBJECT& output, SCALAR&& other) {
+			if constexpr (std::is_arithmetic_v<SCALAR>)
+				return OutputSignal<OBJECT>(output) + float(other);
+			else
+				return OutputSignal<OBJECT>(output) + other;
+		}
 		template<typename OBJECT, typename SCALAR>
-		inline ScalarOutput<OBJECT, SCALAR> operator*(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) * float(other); }
+		inline ScalarOutput<OBJECT, SCALAR> operator*(OBJECT& output, SCALAR&& other) {
+			if constexpr (std::is_arithmetic_v<SCALAR>)
+				return OutputSignal<OBJECT>(output) * float(other);
+			else
+				return OutputSignal<OBJECT>(output) * other;
+		}
 		template<typename OBJECT, typename SCALAR>
-		inline ScalarOutput<OBJECT, SCALAR> operator-(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) - float(other); }
+		inline ScalarOutput<OBJECT, SCALAR> operator-(OBJECT& output, SCALAR&& other) {
+			if constexpr (std::is_arithmetic_v<SCALAR>)
+				return OutputSignal<OBJECT>(output) - float(other);
+			else
+				return OutputSignal<OBJECT>(output) - other;
+		}
 		template<typename OBJECT, typename SCALAR>
-		inline ScalarOutput<OBJECT, SCALAR> operator/(OBJECT& output, SCALAR&& other) { return OutputSignal<OBJECT>(output) / float(other); }
+		inline ScalarOutput<OBJECT, SCALAR> operator/(OBJECT& output, SCALAR&& other) {
+			if constexpr (std::is_arithmetic_v<SCALAR>)
+				return OutputSignal<OBJECT>(output) / float(other);
+			else
+				return OutputSignal<OBJECT>(output) / other;
+		}
 
 		//inline signal operator+(Output& other, Output& output) { return signal(output) + signal(other); }
 		//inline signal operator*(Output& other, Output& output) { return signal(output) * signal(other); }
@@ -3387,11 +3875,212 @@ namespace klang {
 	}
 
 	// Extend common standard unary maths overload sets for Klang wrapper types.
+	/// Return the C++ remainder for integers and the floating-point remainder otherwise.
+	template<typename LEFT, typename RIGHT, std::enable_if_t<
+		std::is_arithmetic_v<LEFT> && std::is_arithmetic_v<RIGHT>, int> = 0>
+	inline auto mod(LEFT left, RIGHT right) {
+		if constexpr (std::is_integral_v<LEFT> && std::is_integral_v<RIGHT>)
+			return left % right;
+		else {
+			using Float = std::conditional_t<
+				std::is_same_v<LEFT, long double> || std::is_same_v<RIGHT, long double>, long double,
+				std::conditional_t<std::is_same_v<LEFT, double> || std::is_same_v<RIGHT, double>, double, float>>;
+			return std::fmod(Float(left), Float(right));
+		}
+	}
+
+
+// Shared numeric, parameter-inlet and math-stage implementation.
+namespace detail {
+    template<class T>
+    inline constexpr bool is_control_v =
+        std::is_same_v<std::decay_t<T>, Control> ||
+        std::is_same_v<std::decay_t<T>, ControlMap>;
+
+    /// Arithmetic values, signal subclasses and controls support scalar snapshots.
+    template<class T>
+    inline constexpr bool is_math_value_v = std::is_arithmetic_v<std::decay_t<T>> ||
+        std::is_base_of_v<signal, std::decay_t<T>> ||
+        std::is_same_v<std::decay_t<T>, constant> ||
+        is_control_v<T>;
+
+    template<class... Values>
+    inline constexpr bool are_math_values_v = (is_math_value_v<Values> && ...);
+
+    template<class... Values>
+    inline constexpr bool has_control_v = (is_control_v<Values> || ...);
+
+    /// Read one float without advancing a control, generator, or function.
+    template<class T, std::enable_if_t<is_math_value_v<T>, int> = 0>
+    inline float numeric_snapshot(const T& value) { return float(value); }
+
+    template<class TARGET, class VALUE, class = void>
+    struct has_native_template_inlet : std::false_type {};
+
+    template<class TARGET, class VALUE>
+    struct has_native_template_inlet<TARGET, VALUE, std::void_t<decltype(
+        std::declval<TARGET&>().template operator<< <>(std::declval<VALUE>()))>>
+        : std::true_type {};
+
+    template<class TARGET>
+    using param_inlet_result = decltype(std::declval<TARGET&>().operator<<(std::declval<param>()));
+
+    template<class TARGET, class = void>
+    struct has_param_inlet : std::false_type {};
+
+    template<class TARGET>
+    struct has_param_inlet<TARGET, std::void_t<decltype(
+        static_cast<param_inlet_result<TARGET> (TARGET::*)(param)>(&TARGET::operator<<))>>
+        : std::true_type {};
+
+    template<class TARGET, class VALUE>
+    using route_param_inlet = std::conjunction<
+        std::is_convertible<VALUE, param>,
+        std::negation<std::is_same<std::decay_t<VALUE>, param>>,
+        std::negation<has_native_template_inlet<TARGET, VALUE>>,
+        has_param_inlet<TARGET>>;
+
+    // Function objects retain the float boundaries of the existing math adapters.
+    #define KLANG_BINARY_OPERATION(function, evaluate) \
+        struct function##_operation { \
+            float operator()(float left, float right) const { \
+                return float(evaluate(left, right)); \
+            } \
+        };
+
+    #define KLANG_TERNARY_OPERATION(function, evaluate) \
+        struct function##_operation { \
+            float operator()(float left, float middle, float right) const { \
+                return float(evaluate(left, middle, right)); \
+            } \
+        };
+
+    KLANG_BINARY_OPERATION(min, std::min)
+    KLANG_BINARY_OPERATION(max, std::max)
+    KLANG_BINARY_OPERATION(pow, std::pow)
+    KLANG_BINARY_OPERATION(atan2, std::atan2)
+    KLANG_BINARY_OPERATION(hypot, std::hypot)
+    KLANG_BINARY_OPERATION(fmod, std::fmod)
+    KLANG_BINARY_OPERATION(remainder, std::remainder)
+    KLANG_BINARY_OPERATION(copysign, std::copysign)
+    KLANG_BINARY_OPERATION(fdim, std::fdim)
+    KLANG_BINARY_OPERATION(mod, klang::mod)
+    KLANG_TERNARY_OPERATION(clamp, std::clamp)
+
+    #undef KLANG_BINARY_OPERATION
+    #undef KLANG_TERNARY_OPERATION
+
+    /// A stateless binary maths operation with its right argument bound for signal flow.
+    template<class OPERATION>
+    struct BinaryMath {
+        float right;
+    };
+
+    /// A stateless ternary maths operation with its final two arguments bound for signal flow.
+    template<class OPERATION>
+    struct TernaryMath {
+        float middle, right;
+    };
+
+    template<class OPERATION>
+    inline signal operator>>(signal left, const BinaryMath<OPERATION>& stage) {
+        return OPERATION{}(float(left), stage.right);
+    }
+
+    template<class OPERATION>
+    inline signal operator>>(signal left, const TernaryMath<OPERATION>& stage) {
+        return OPERATION{}(float(left), stage.middle, stage.right);
+    }
+
+    /// Route values to parameter inlets while preserving native template sinks.
+    template<class TARGET, class VALUE, std::enable_if_t<
+        detail::route_param_inlet<TARGET, VALUE&&>::value, int> = 0>
+    inline auto operator<<(TARGET& target, VALUE&& value)
+        -> decltype(target.operator<<(std::forward<VALUE>(value))) {
+        return target.operator<<(std::forward<VALUE>(value));
+    }
+
+    template<class SOURCE, class DESTINATION>
+    auto flow_destination(std::true_type)
+        -> decltype(std::declval<DESTINATION&>().input(std::declval<SOURCE>()));
+
+    template<class SOURCE, class DESTINATION>
+    auto flow_destination(std::false_type)
+        -> decltype(std::declval<DESTINATION&>() << std::declval<SOURCE>());
+}
+
+using detail::operator<<;
+
+// Extend a scalar unary function with the Klang value and signal-flow interface.
+#define KLANG_UNARY_ADAPTER(function, evaluate) \
+    inline signal function(signal input) { return evaluate(input.value); } \
+    template<class Input, std::enable_if_t<detail::is_control_v<Input>, int> = 0> \
+    inline signal function(const Input& input) { \
+        return evaluate(detail::numeric_snapshot(input)); \
+    }
+
+// Shared adapters only participate when a control is present. Existing scalar,
+// signal, unit-wrapper, Output and Function overloads retain their own dispatch.
+#define KLANG_CONTROL_BINARY_MATH(function) \
+    template<class Right, std::enable_if_t<detail::is_control_v<Right>, int> = 0> \
+    inline detail::BinaryMath<detail::function##_operation> function(const Right& right) { \
+        return {detail::numeric_snapshot(right)}; \
+    } \
+    template<class Left, class Right, std::enable_if_t< \
+        detail::are_math_values_v<Left, Right> && \
+        detail::has_control_v<Left, Right>, int> = 0> \
+    inline signal function(const Left& left, const Right& right) { \
+        return detail::function##_operation{}(detail::numeric_snapshot(left), \
+                                              detail::numeric_snapshot(right)); \
+    } \
+    inline signal function(const Control& left, const Control& right) { \
+        return detail::function##_operation{}(detail::numeric_snapshot(left), \
+                                              detail::numeric_snapshot(right)); \
+    } \
+    inline signal function(const ControlMap& left, const ControlMap& right) { \
+        return detail::function##_operation{}(detail::numeric_snapshot(left), \
+                                              detail::numeric_snapshot(right)); \
+    }
+
+// Standard min/max require matching types; promote mixed arithmetic arguments.
+#define KLANG_MIXED_ARITHMETIC_MATH(function) \
+    template<class Left, class Right, std::enable_if_t< \
+        std::is_arithmetic_v<Left> && std::is_arithmetic_v<Right> && \
+        !std::is_same_v<Left, Right>, int> = 0> \
+    inline auto function(Left left, Right right) { \
+        using Value = std::common_type_t<Left, Right>; \
+        return std::function(Value(left), Value(right)); \
+    }
+
+// std::clamp's same-type template otherwise wins over the mixed-type adapter.
+// Two non-template bridges make the numeric rule apply equally to const controls.
+#define KLANG_CONTROL_TERNARY_MATH(function) \
+    template<class Middle, class Right, std::enable_if_t< \
+        detail::are_math_values_v<Middle, Right> && \
+        detail::has_control_v<Middle, Right>, int> = 0> \
+    inline detail::TernaryMath<detail::function##_operation> function( \
+        const Middle& middle, const Right& right) { \
+        return {detail::numeric_snapshot(middle), detail::numeric_snapshot(right)}; \
+    } \
+    template<class Left, class Middle, class Right, std::enable_if_t< \
+        detail::are_math_values_v<Left, Middle, Right> && \
+        detail::has_control_v<Left, Middle, Right>, int> = 0> \
+    inline signal function(const Left& left, const Middle& middle, const Right& right) { \
+        return detail::function##_operation{}(detail::numeric_snapshot(left), \
+            detail::numeric_snapshot(middle), detail::numeric_snapshot(right)); \
+    } \
+    inline signal function(const Control& left, const Control& middle, const Control& right) { \
+        return detail::function##_operation{}(detail::numeric_snapshot(left), \
+            detail::numeric_snapshot(middle), detail::numeric_snapshot(right)); \
+    } \
+    inline signal function(const ControlMap& left, const ControlMap& middle, const ControlMap& right) { \
+        return detail::function##_operation{}(detail::numeric_snapshot(left), \
+            detail::numeric_snapshot(middle), detail::numeric_snapshot(right)); \
+    }
+
 #define KLANG_UNARY_MATH(function) \
 	using std::function; \
-	inline signal function(signal input) { return std::function(input.value); } \
-	inline float function(const Control& input) { return float(std::function(float(input))); } \
-	inline float function(const ControlMap& input) { return float(std::function(float(input))); }
+	KLANG_UNARY_ADAPTER(function, std::function)
 
 	KLANG_UNARY_MATH(abs)
 	KLANG_UNARY_MATH(sqrt)
@@ -3422,19 +4111,102 @@ namespace klang {
 	KLANG_UNARY_MATH(erf)
 	KLANG_UNARY_MATH(erfc)
 
+	/// Alias for trunc, including signal-flow use.
+	inline float truncate(float input) { return std::trunc(input); }
+	template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
+	inline auto truncate(TYPE input) { return std::trunc(input); }
+	KLANG_UNARY_ADAPTER(truncate, std::trunc)
+
 #undef KLANG_UNARY_MATH
 
+
+	// Extend standard binary maths with direct signal overloads and function(right) flow stages.
+#define KLANG_BINARY_MATH(function) \
+	template<typename RIGHT, std::enable_if_t<std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline detail::BinaryMath<detail::function##_operation> function(RIGHT right) { \
+		return {float(right)}; \
+	} \
+	inline detail::BinaryMath<detail::function##_operation> function(signal right) { \
+		return {right.value}; \
+	} \
+	inline signal function(signal left, signal right) { \
+		return detail::function##_operation{}(float(left), float(right)); \
+	} \
+	template<typename RIGHT, std::enable_if_t<std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline signal function(signal left, RIGHT right) { \
+		return detail::function##_operation{}(float(left), float(right)); \
+	} \
+	template<typename LEFT, std::enable_if_t<std::is_arithmetic_v<LEFT>, int> = 0> \
+	inline signal function(LEFT left, signal right) { \
+		return detail::function##_operation{}(float(left), float(right)); \
+	} \
+	KLANG_CONTROL_BINARY_MATH(function)
+
+	// Keep ordinary scalar calls visible after adding the Klang overloads below.
+	using std::pow;
+	using std::atan2;
+	using std::hypot;
+	using std::fmod;
+	using std::remainder;
+	using std::copysign;
+	using std::fdim;
+	using std::clamp;
+
+	// Extend standard ternary maths with direct signal overloads and function(middle,right) flow stages.
+#define KLANG_TERNARY_MATH(function) \
+	template<typename MIDDLE, typename RIGHT, \
+		std::enable_if_t<std::is_arithmetic_v<MIDDLE> && std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline detail::TernaryMath<detail::function##_operation> function(MIDDLE middle, RIGHT right) { \
+		return {float(middle), float(right)}; \
+	} \
+	inline signal function(signal left, signal middle, signal right) { \
+		return detail::function##_operation{}(float(left), float(middle), float(right)); \
+	} \
+	template<typename MIDDLE, typename RIGHT, \
+		std::enable_if_t<std::is_arithmetic_v<MIDDLE> && std::is_arithmetic_v<RIGHT>, int> = 0> \
+	inline signal function(signal left, MIDDLE middle, RIGHT right) { \
+		return detail::function##_operation{}(float(left), float(middle), float(right)); \
+	} \
+	KLANG_CONTROL_TERNARY_MATH(function)
+
+	KLANG_BINARY_MATH(min)
+	KLANG_BINARY_MATH(max)
+	KLANG_MIXED_ARITHMETIC_MATH(min)
+	KLANG_MIXED_ARITHMETIC_MATH(max)
+	KLANG_BINARY_MATH(pow)
+	KLANG_BINARY_MATH(atan2)
+	KLANG_BINARY_MATH(hypot)
+	KLANG_BINARY_MATH(fmod)
+	KLANG_BINARY_MATH(remainder)
+	KLANG_BINARY_MATH(copysign)
+	KLANG_BINARY_MATH(fdim)
+	KLANG_TERNARY_MATH(clamp)
+
+	/// Alias clamp as clip for signal-flow terminology.
+	template<typename... ARGS>
+	inline auto clip(ARGS&&... args) -> decltype(clamp(std::forward<ARGS>(args)...)) {
+		return clamp(std::forward<ARGS>(args)...);
+	}
+
+
+	KLANG_BINARY_MATH(mod)
+
+#undef KLANG_MIXED_ARITHMETIC_MATH
+#undef KLANG_CONTROL_BINARY_MATH
+#undef KLANG_CONTROL_TERNARY_MATH
+#undef KLANG_BINARY_MATH
+#undef KLANG_TERNARY_MATH
+
 	/// Stateless square and cube functions preserve Klang signals in audio expressions.
-	inline signal sqr(signal input) { return input * input; }
-	inline signal cube(signal input) { return input * input * input; }
 	template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
 	inline TYPE sqr(TYPE input) { return input * input; }
 	template<typename TYPE, std::enable_if_t<std::is_arithmetic_v<TYPE>, int> = 0>
 	inline TYPE cube(TYPE input) { return input * input * input; }
-	inline float sqr(const Control& input) { const float value = float(input); return value * value; }
-	inline float cube(const Control& input) { const float value = float(input); return value * value * value; }
-	inline float sqr(const ControlMap& input) { const float value = float(input); return value * value; }
-	inline float cube(const ControlMap& input) { const float value = float(input); return value * value * value; }
+
+	KLANG_UNARY_ADAPTER(sqr, klang::sqr)
+	KLANG_UNARY_ADAPTER(cube, klang::cube)
+
+#undef KLANG_UNARY_ADAPTER
 
 	/// Debug text output
 	struct Console : public Text<16384> {
@@ -4123,49 +4895,150 @@ namespace klang {
 		}
 	};
 
-	/// Sample-based signal generator
-	class Sample : public Oscillator {
-		using Oscillator::set;
+	/// Sample-based signal generator with variable-rate playback.
+	class Sample : public Generator {
+		using Generator::set;
+
 	protected:
 		buffer buffer;
-		int size;
+		int size = 0;
+
 	public:
-		Sample() : buffer(nullptr, 0), size(0) { }
+		using Generator::operator();
+
+		/// Optional root pitch in Hz and recording sample rate in samples per second.
+		struct Info {
+			Frequency frequency = 0;
+			SampleRate samplerate = 0;
+		} info;
+
+		/// Select one-shot or looping playback.
+		enum Mode { OneShot, Looped };
+		Mode mode = OneShot;
+
+		/// Buffer assignment with optional recording metadata and playback mode.
+		struct Binding {
+			const klang::buffer& source;
+			std::optional<Info> info;
+			std::optional<Mode> mode;
+
+			Binding(const klang::buffer& source, Info info, std::optional<Mode> mode = std::nullopt)
+				: source(source), info(info), mode(mode) {}
+
+			template<typename TYPE, std::enable_if_t<std::is_same_v<TYPE, Mode>, int> = 0>
+			Binding(const klang::buffer& source, TYPE mode)
+				: source(source), mode(mode) {}
+		};
+
+		Sample() : buffer(nullptr, 0) {}
 
 		signal& operator[](int index) {
 			return buffer[index];
 		}
 
-		Sample& operator=(const klang::buffer& buffer) {
-			size = buffer.size;
-			Sample::buffer.attach(buffer, size);
+		/// Borrow the sample storage and return to the start of the buffer.
+		Sample& operator=(const klang::buffer& source) {
+			size = source.size;
+			if (size > 0) buffer.attach(source, size);
+			reset();
 			return *this;
 		}
 
-		virtual void set(param frequency) override {
-			Oscillator::frequency = frequency;
-			increment = 1;// frequency* (44100 / fs);
+		/// Change the mode without moving the playback position.
+		Sample& operator=(Mode mode) {
+			this->mode = mode;
+			return *this;
 		}
 
-		virtual void set(param frequency, param phase) override {
-			position = phase * float(44100);
+		Sample& operator=(const Binding& binding) {
+			if (binding.info) info = *binding.info;
+			if (binding.mode) mode = *binding.mode;
+			return *this = binding.source;
+		}
+
+		/// Set the playback speed, with one representing the original rate.
+		void set(param rate) override {
+			if (finite(rate.value)) this->rate = rate.value;
+		}
+
+		/// Set playback speed from a target frequency and the available metadata.
+		template<typename TYPE, std::enable_if_t<std::is_same_v<TYPE, Frequency>, int> = 0>
+		void set(TYPE frequency) {
+			const float root = info.frequency.value;
+			const float recorded = info.samplerate.f;
+			const float reference = positive(root) ? root : positive(recorded) ? recorded : 0;
+			if (reference > 0 && finite(frequency.value))
+				rate = double(frequency.value) / reference;
+		}
+
+		Sample& operator()(Frequency frequency) {
 			set(frequency);
+			return *this;
 		}
 
-		virtual void set(relative phase) override {
-			offset = phase * float(44100);
+		/// Set playback speed and seek to a time in seconds.
+		void set(param rate, param time) override {
+			set(rate);
+			if (finite(time.value)) position = double(time.value) * sourceRate();
 		}
 
-		virtual void set(param frequency, relative phase) override {
-			set(frequency);
-			set(phase);
+		/// Set a read offset in seconds.
+		void set(relative time) override {
+			if (finite(time.value)) offset = double(time.value) * sourceRate();
 		}
+
+		void set(param rate, relative time) override {
+			set(rate);
+			set(time);
+		}
+
+		/// Rewind the playback position.
+		void reset() { position = 0; }
 
 		void process() override {
-			position += { increment, size };
-			out = buffer[position + offset];
+			const bool looped = mode == Looped;
+			double read = position + offset;
+			if (size == 0 || (!looped && (read < 0 || read >= size))) {
+				out = 0;
+				return;
+			}
+			if (looped) read = wrap(read);
+			const int index = int(read);
+			const int next = index + 1 < size ? index + 1 : (looped ? 0 : index);
+			const double fraction = read - index;
+			out = buffer[index] * (1 - fraction) + buffer[next] * fraction;
+			const float host = fs.f;
+			const float recorded = info.samplerate.f;
+			const double step = positive(recorded) && positive(host) ? rate * recorded / host : rate;
+			position += step;
+			if (looped) position = wrap(position);
+		}
+
+	private:
+		double rate = 1, position = 0, offset = 0;
+
+		static bool finite(float value) {
+			std::uint32_t bits;
+			std::memcpy(&bits, &value, sizeof(bits));
+			return (bits & 0x7f800000u) != 0x7f800000u;
+		}
+
+		static bool positive(float value) { return finite(value) && value > 0; }
+
+		float sourceRate() const {
+			if (positive(info.samplerate.f)) return info.samplerate.f;
+			return positive(fs.f) ? fs.f : 0;
+		}
+
+		double wrap(double index) const {
+			if (index >= 0 && index < size) return index;
+			index = std::fmod(index, double(size));
+			if (index < 0) index += size;
+			return index < size ? index : 0;
 		}
 	};
+	inline constexpr Sample::Mode OneShot = Sample::OneShot;
+	inline constexpr Sample::Mode Looped = Sample::Looped;
 
 	/// Envelope object
 	class Envelope : public Generator {
@@ -4418,11 +5291,17 @@ namespace klang {
 			return getStage() == Stage::Off;
 		}
 
-		// Prepare envelope to (re)start
+		// Initialise a new envelope and clear any previous loop.
 		void initialise() {
-			point = 0;
-			timeInc = 1.0f / fs;
 			loop.reset();
+			restart();
+		}
+
+		/// Restart from the first point, preserving the configured loop.
+		void restart() {
+			point = 0;
+			time = 0;
+			timeInc = 1.0f / fs;
 			stage = Sustain;
 			if (points.size()) {
 				out = points[0].y;
@@ -5375,7 +6254,10 @@ namespace klang {
 	/// @endcond
 
 	/// Feed audio source to destination (with source processing)
-	template<typename SOURCE, typename DESTINATION>
+	template<typename SOURCE, typename DESTINATION, class = decltype(
+		detail::flow_destination<SOURCE&, DESTINATION>(std::bool_constant<
+			is_derived_from<Input, DESTINATION>() ||
+			is_derived_from<Stereo::Input, DESTINATION>()>{}))>
 	inline DESTINATION& operator>>(SOURCE& source, DESTINATION& destination) {
 		if constexpr (is_derived_from<Input, DESTINATION>())
 			destination.input(source); // input to destination (enables overriding of <<)
@@ -5387,7 +6269,10 @@ namespace klang {
 	}
 
 	/// Feed audio source to destination (no source processing)
-	template<typename SOURCE, typename DESTINATION>
+	template<typename SOURCE, typename DESTINATION, class = decltype(
+		detail::flow_destination<const SOURCE&, DESTINATION>(std::bool_constant<
+			is_derived_from<Input, DESTINATION>() ||
+			is_derived_from<Stereo::Input, DESTINATION>()>{}))>
 	inline DESTINATION& operator>>(const SOURCE& source, DESTINATION& destination) {
 		if constexpr (is_derived_from<Input, DESTINATION>())
 			destination.input(source); // input to destination (enables overriding of <<)
@@ -5519,7 +6404,7 @@ namespace klang {
 			};
 		};
 
-		/// Performance-optimised oscillators
+		/// Fast oscillators and phase helpers.
 		namespace Fast {
 			constexpr float twoPi = float(2.0 * 3.1415926535897932384626433832795);
 			constexpr float twoPiInv = float(1.0 / twoPi);
@@ -5629,6 +6514,64 @@ namespace klang {
 				Fast::Phase position, offset;
 			};
 
+			/// Aliased 0-to-1 ramp using an integer wrapping phase.
+			struct Phasor : Oscillator {
+				Phasor() { set(frequency); }
+
+				void reset() override {
+					Phasor::position = Oscillator::position = 0;
+				}
+
+				void set(param frequency) override {
+					if (frequency != Oscillator::frequency || sampleRate != double(fs)) {
+						sampleRate = fs;
+						Oscillator::frequency = frequency;
+						increment.set(frequency);
+					}
+				}
+
+				void set(param frequency, param phase) override {
+					Phasor::position = Oscillator::position = phase;
+					set(frequency);
+				}
+
+				void set(param frequency, relative phase) override {
+					set(frequency);
+					set(phase);
+				}
+
+				void set(relative phase) override {
+					Phasor::offset = Oscillator::offset = phase * twoPi;
+				}
+
+				void process() override {
+					Fast::Phase phase = position;
+					phase.position += offset.position;
+					out = float(phase);
+					position += increment;
+				}
+
+			protected:
+				double sampleRate = 0;
+				Fast::Increment increment;
+				Fast::Phase position, offset;
+			};
+
+			/// White noise generator (optimised)
+			struct Noise : public Generator {
+				static constexpr unsigned int bias = 0b1000011100000000000000000000000;
+				/// @cond
+				union { unsigned int i; float f; };
+				/// @endcond
+				void process() {
+					i = ((rand() & 0b111111111111111UL) << 1) | bias;
+					out = f - 257.f;
+				}
+			};
+		};
+
+		/// Sample-averaged oscillator waveforms.
+		namespace OSM {
 			/** V2 oscillator state machine, with float arithmetic in the sample loop.
 			 * Based on Farbrausch V2 (Tammo Hinrichs; C++ port Fabian Giesen).
 			 * Averages the interval ending at the current phase, then advances.
@@ -5638,8 +6581,6 @@ namespace klang {
 			 * Negative Hz reflects phase in set(); both directions use the forward state machine.
 			 * See V2-SOURCE-REVIEW.md and OSM-STATUS.md for provenance and limits.
 			 */
-			// Experimental replacement for Fast::OSM, inserted by probe_osm_layout.py.
-			// Not a standalone include. See OSM-REFLECTION.md for the identity and results.
 #if defined(_MSC_VER)
 #define KLANG_OSM_INLINE __forceinline
 #elif defined(__clang__) || defined(__GNUC__)
@@ -5647,10 +6588,10 @@ namespace klang {
 #else
 #define KLANG_OSM_INLINE inline
 #endif
-			struct OSM {
-				using Waveform = float(OSM::*)();
+			struct StateMachine {
+				using Waveform = float(StateMachine::*)();
 				const Waveform waveform;
-				KLANG_OSM_INLINE OSM(Waveform waveform) : waveform(waveform) {}
+				KLANG_OSM_INLINE StateMachine(Waveform waveform) : waveform(waveform) {}
 
 				// Transition bits: wrap:previous_up:current_up; "up" means phase < breakpoint.
 				// Internal phase always travels forwards, including for negative Hz.
@@ -5732,7 +6673,7 @@ namespace klang {
 						if (reverse != negative) {
 							reverse = negative;
 							offset.position = static_cast<unsigned int>(breakpoint) - offset.position;
-							if (waveform == &OSM::saw) {
+							if (waveform == &StateMachine::saw) {
 								amplitude = -amplitude;
 								rising = -rising;
 								falling = -falling;
@@ -5852,7 +6793,7 @@ namespace klang {
 			#elif defined(__GNUC__)
 			__attribute__((noinline))
 			#endif
-			inline unsigned int OSM::wideStep(unsigned int bits) {
+			inline unsigned int StateMachine::wideStep(unsigned int bits) {
 				if ((bits & 0x7f800000u) == 0x7f800000u || sampleRate <= 0) {
 					f = inverseStep = 0;
 					gain = 1;
@@ -5875,7 +6816,7 @@ namespace klang {
 			/// @cond
 			struct Osm : public Oscillator {
 				const float _Duty;
-				KLANG_OSM_INLINE Osm(OSM::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) {
+				KLANG_OSM_INLINE Osm(StateMachine::Waveform waveform, float duty = 0.f) : _Duty(duty), osm(waveform) {
 					osm.setDuty(duty);
 					osm.set(frequency);
 				}
@@ -5901,7 +6842,7 @@ namespace klang {
 					set(phase);
 				}
 				KLANG_OSM_INLINE void set(relative phase) override {
-					Oscillator::offset = phase * twoPi;
+					Oscillator::offset = phase * Fast::twoPi;
 					osm.setOffset(Oscillator::offset);
 				}
 				KLANG_OSM_INLINE void setDuty(param duty) { osm.setDuty(duty); }
@@ -5912,87 +6853,253 @@ namespace klang {
 				KLANG_OSM_INLINE void process() override { out = osm.output(); }
 
 			protected:
-				OSM osm;
+				StateMachine osm;
 			};
 			/// @endcond
 
-			/// Descending saw, averaged over each sample interval.
+			/// Descending sawtooth.
 			struct Saw : public Osm {
-				KLANG_OSM_INLINE Saw() : Osm(&OSM::saw, 0.f) {}
+				KLANG_OSM_INLINE Saw() : Osm(&StateMachine::saw, 0.f) {}
 				KLANG_OSM_INLINE void process() override { out = osm.saw(); }
 			};
-			/// Triangle with equal rising and falling half-cycles, sample-averaged.
+			/// Triangle wave with equal rising and falling half-cycles.
 			struct Triangle : public Osm {
-				KLANG_OSM_INLINE Triangle() : Osm(&OSM::saw, 0.5f) {}
+				KLANG_OSM_INLINE Triangle() : Osm(&StateMachine::saw, 0.5f) {}
 				KLANG_OSM_INLINE void process() override { out = osm.saw(); }
 			};
-			/// Square with 50% high duty, sample-averaged.
+			/// Square wave with 50% high duty.
 			struct Square : public Osm {
-				KLANG_OSM_INLINE Square() : Osm(&OSM::pulse, 0.5f) {}
+				KLANG_OSM_INLINE Square() : Osm(&StateMachine::pulse, 0.5f) {}
 				KLANG_OSM_INLINE void process() override { out = osm.pulse(); }
 			};
-			/// Pulse with configurable high duty in [0,1], sample-averaged.
+			/// Pulse wave with adjustable duty cycle.
 			struct Pulse : public Osm {
-				KLANG_OSM_INLINE Pulse() : Osm(&OSM::pulse, 0.5f) {}
+				KLANG_OSM_INLINE Pulse() : Osm(&StateMachine::pulse, 0.5f) {}
 				KLANG_OSM_INLINE void process() override { out = osm.pulse(); }
 			};
 
 #undef KLANG_OSM_INLINE
-			/// Aliased 0-to-1 ramp using an integer wrapping phase.
-			struct Phasor : Oscillator {
-				Phasor() { set(frequency); }
+		};
 
-				void reset() override {
-					Phasor::position = Oscillator::position = 0;
+		/// Polynomial antialiasing with an integer phase accumulator.
+		namespace PolyBLEP {
+
+#if defined(_MSC_VER)
+#define KLANG_BLEP_INLINE __forceinline
+#define KLANG_BLEP_COLD __declspec(noinline)
+#elif defined(__clang__) || defined(__GNUC__)
+#define KLANG_BLEP_INLINE inline __attribute__((always_inline))
+#define KLANG_BLEP_COLD __attribute__((noinline))
+#else
+#define KLANG_BLEP_INLINE inline
+#define KLANG_BLEP_COLD
+#endif
+			/// @cond
+			template<bool PULSE>
+			struct Polynomial : public Oscillator {
+				const float _Duty;
+				using Oscillator::set;
+
+				KLANG_BLEP_INLINE explicit Polynomial(float duty) : _Duty(duty) {
+					setDuty(duty);
+					set(frequency);
 				}
 
-				void set(param frequency) override {
-					if (frequency != Oscillator::frequency || sampleRate != double(fs)) {
-						sampleRate = fs;
-						Oscillator::frequency = frequency;
-						increment.set(frequency);
+				KLANG_BLEP_INLINE void set(param hz) override {
+					const unsigned int request = bits(hz.value);
+					if (bits(frequency.value) == request && sampleRate == fs.f) return;
+					frequency = hz;
+					if (sampleRate != fs.f) {
+						sampleRate = fs.f;
+						ticksPerHz = finite(bits(sampleRate)) && sampleRate > 0 ? turn / sampleRate : 0;
 					}
+					const float magnitude = finite(request) ? std::fabs(hz.value) : 0;
+					const bool audible = magnitude < sampleRate * .5f;
+					const double ticks = magnitude < sampleRate ? magnitude * ticksPerHz
+						: ticksPerHz > 0 ? std::fmod(double(magnitude), double(sampleRate)) * ticksPerHz : 0;
+					const auto advance = static_cast<unsigned int>(ticks < turn ? ticks : 0);
+					width = audible ? advance : 0;
+					inverseWidth = width ? 1.f / float(width) : 0;
+					increment = request >> 31 ? 0u - advance : advance;
+					// Bring the remaining harmonics to zero before the fundamental reaches Nyquist.
+					gain = audible ? std::clamp((.5f - float(width) * tickScale) * 20.f, 0.f, 1.f)
+						: ticksPerHz > 0 ? 0.f : 1.f;
 				}
 
-				void set(param frequency, param phase) override {
-					Phasor::position = Oscillator::position = phase;
-					set(frequency);
+				KLANG_BLEP_INLINE void set(param hz, param phase) override {
+					set(hz);
+					Oscillator::position = phase;
+					Oscillator::offset = 0;
+					position = phase;
+					offset.position = 0;
 				}
 
-				void set(param frequency, relative phase) override {
-					set(frequency);
+				KLANG_BLEP_INLINE void set(param hz, param phase, param duty) override {
+					set(hz, phase);
+					setDuty(duty);
+				}
+
+				KLANG_BLEP_INLINE void set(param hz, relative phase) override {
+					set(hz);
 					set(phase);
 				}
 
-				void set(relative phase) override {
-					Phasor::offset = Oscillator::offset = phase * twoPi;
+				KLANG_BLEP_INLINE void set(relative phase) override {
+					Oscillator::offset = phase * Fast::twoPi;
+					offset = Oscillator::offset;
 				}
 
-				void process() override {
-					Fast::Phase phase = position;
-					phase.position += offset.position;
-					out = float(phase);
-					position += increment;
+				KLANG_BLEP_INLINE void setDuty(param duty) {
+					dutyCycle = finite(bits(duty.value)) ? std::clamp(duty.value, 0.f, 1.f) : .5f;
+					const auto ticks = static_cast<unsigned long long>(double(dutyCycle) * turn);
+					breakpoint = static_cast<unsigned int>(ticks);
+					if constexpr (PULSE) {
+						low = dutyCycle == 1 ? 1.f : -1.f;
+						narrowDuty = dutyCycle > 0 && dutyCycle < 1.f / 16384;
+					}
+					else {
+						narrowDuty = (dutyCycle > 0 && dutyCycle < 1.f / 16384)
+							|| (dutyCycle < 1 && dutyCycle > 1.f - 1.f / 16384);
+						rising = dutyCycle > 0 ? 2.f / dutyCycle : 0;
+						falling = dutyCycle < 1 ? 2.f / (1 - dutyCycle) : 0;
+					}
 				}
 
-			protected:
-				double sampleRate = 0;
-				Fast::Increment increment;
+				KLANG_BLEP_INLINE void reset() override {
+					Oscillator::position = 0;
+					position.position = 0;
+				}
+
+				KLANG_BLEP_INLINE void process() override {
+					const unsigned int phase = position.position + offset.position;
+					position.position += increment;
+					const float mean = PULSE ? 2 * dutyCycle - 1 : 0;
+					if (gain == 0) {
+						out = mean;
+						return;
+					}
+					float wave;
+					if (narrowDuty) wave = integrate(phase);
+					else if constexpr (PULSE) {
+						wave = (phase < breakpoint ? 1.f : low) + step(phase) - step(phase - breakpoint);
+					}
+					else if (!breakpoint) {
+						const float saw = 1.f - 2 * (float(phase) * tickScale) + step(phase);
+						wave = dutyCycle == 0 ? saw : -saw;
+					}
+					else {
+						wave = phase < breakpoint
+							? float(phase) * tickScale * rising - 1
+							: float(0u - phase) * tickScale * falling - 1;
+						// Integrate the step correction at each slope discontinuity.
+						wave += (rising + falling) * (float(width) * (tickScale / 6))
+							* (corner(phase) - corner(phase - breakpoint));
+					}
+					out = gain == 1 ? wave : mean + gain * (wave - mean);
+				}
+
+			private:
+				static constexpr double turn = 4294967296.0;
+				static constexpr float tickScale = 1.f / 4294967296.f;
 				Fast::Phase position, offset;
-			};
+				unsigned int increment = 0, width = 0, breakpoint = 0;
+				float inverseWidth = 0, dutyCycle = 0, rising = 0, falling = 0, low = -1, sampleRate = 0;
+				double ticksPerHz = 0;
+				float gain = 1;
+				bool narrowDuty = false;
 
-			/// White noise generator (optimised)
-			struct Noise : public Generator {
-				static constexpr unsigned int bias = 0b1000011100000000000000000000000;
-				/// @cond
-				union { unsigned int i; float f; };
-				/// @endcond
-				void process() {
-					i = ((rand() & 0b111111111111111UL) << 1) | bias;
-					out = f - 257.f;
+				static KLANG_BLEP_INLINE unsigned int bits(float value) {
+					unsigned int result;
+					std::memcpy(&result, &value, sizeof(result));
+					return result;
+				}
+
+				static KLANG_BLEP_INLINE bool finite(unsigned int bits) {
+					return (bits & 0x7f800000u) != 0x7f800000u;
+				}
+
+				static KLANG_BLEP_INLINE std::int32_t signedDistance(unsigned int distance) {
+					std::int32_t result;
+					std::memcpy(&result, &distance, sizeof(result));
+					return result;
+				}
+
+				KLANG_BLEP_INLINE float step(unsigned int distance) const {
+					if (distance + width >= 2u * width) return 0;
+					const auto ticks = signedDistance(distance);
+					const float x = 1.f - std::fabs(float(ticks)) * inverseWidth;
+					return ticks < 0 ? x * x : -x * x;
+				}
+
+				KLANG_BLEP_INLINE float corner(unsigned int distance) const {
+					if (distance + width >= 2u * width) return 0;
+					const float x = 1.f - std::fabs(float(signedDistance(distance))) * inverseWidth;
+					return x * x * x;
+				}
+
+				// Integrate close edges without subtracting large, nearly equal corrections.
+				KLANG_BLEP_COLD float integrate(unsigned int phase) const {
+					const double center = double(phase) / turn;
+					const double duty = dutyCycle;
+					const double radius = double(width) / turn;
+					if (!width) {
+						if constexpr (PULSE) return center < duty ? 1.f : -1.f;
+						else return float(center < duty
+							? 2 * center / duty - 1 : 2 * (1 - center) / (1 - duty) - 1);
+					}
+					double sum = 0;
+					const auto segment = [&](double start, double length, double from, double to) {
+						const double end = start + length;
+						for (int side : {-1, 1}) {
+							const double a = std::max(start, side < 0 ? -radius : 0.);
+							const double b = std::min(end, side < 0 ? 0. : radius);
+							if (a >= b) continue;
+							const double ka = 1 - std::fabs(a) / radius, kb = 1 - std::fabs(b) / radius;
+							const double va = from + (to - from) * ((a - start) / length);
+							const double vb = from + (to - from) * ((b - start) / length);
+							sum += (b - a) / (6 * radius) * (va * (2 * ka + kb) + vb * (ka + 2 * kb));
+						}
+					};
+					for (int cycle : {-1, 0, 1}) {
+						const double start = cycle - center;
+						if constexpr (PULSE) {
+							segment(start, duty, 1, 1);
+							segment(start + duty, 1 - duty, -1, -1);
+						}
+						else {
+							segment(start, duty, -1, 1);
+							segment(start + duty, 1 - duty, 1, -1);
+						}
+					}
+					return float(sum);
 				}
 			};
+			/// @endcond
+
+			/// Descending saw with polynomial correction at the wrap.
+			struct Saw : public Polynomial<false> {
+				KLANG_BLEP_INLINE Saw() : Polynomial(0.f) {}
+			};
+
+			/// Triangle with polynomial correction at the slope changes.
+			struct Triangle : public Polynomial<false> {
+				KLANG_BLEP_INLINE Triangle() : Polynomial(.5f) {}
+			};
+
+			/// Square wave with 50% high duty and polynomial edge correction.
+			struct Square : public Polynomial<true> {
+				KLANG_BLEP_INLINE Square() : Polynomial(.5f) {}
+			};
+
+			/// Pulse with adjustable duty and polynomial edge correction.
+			struct Pulse : public Polynomial<true> {
+				KLANG_BLEP_INLINE Pulse() : Polynomial(.5f) {}
+			};
+
+#undef KLANG_BLEP_COLD
+#undef KLANG_BLEP_INLINE
 		};
+
 
 		/// Wavetable-based oscillators
 		namespace Wavetables {
@@ -6008,6 +7115,169 @@ namespace klang {
 		}
 	};
 
+	/// @cond
+	namespace detail {
+		enum class Response { LowPass, HighPass, BandPass, BandReject };
+
+		// Transform a first- or second-order analogue prototype into digital sections.
+		template<int FAMILY, int ORDER, Response SHAPE>
+		struct PrototypeFilter : Modifier {
+			static_assert(ORDER == 1 || ORDER == 2, "Supported prototype orders are 1 and 2");
+			static constexpr bool band = SHAPE == Response::BandPass || SHAPE == Response::BandReject;
+			static constexpr int count = band ? ORDER : 1;
+			static constexpr float defaultRipple = FAMILY == 1 ? 1 : FAMILY == 2 ? 40 : 0;
+
+			/// Set the edge frequency in Hz for a low-pass or high-pass response.
+			void set(param edge) override {
+				if constexpr (!band) configure(edge, 0, defaultRipple);
+			}
+
+			/// Set the cutoff and ripple in dB, or the two band edges in Hz.
+			void set(param first, param second) override {
+				if constexpr (band) configure(first, second, defaultRipple);
+				else configure(first, 0, second);
+			}
+
+			/// Set the two band edges in Hz and the ripple or attenuation in dB.
+			void set(param lower, param upper, param ripple) override {
+				if constexpr (band) configure(lower, upper, ripple);
+			}
+
+			void reset() {
+				for (auto& section : sections) section.z1 = section.z2 = 0;
+				in = out = 0;
+			}
+
+			void process() override {
+				double sample = float(in);
+				for (auto& section : sections) {
+					const double next = section.b0 * sample + section.z1;
+					section.z1 = section.b1 * sample - section.a1 * next + section.z2;
+					section.z2 = section.b2 * sample - section.a2 * next;
+					sample = next;
+				}
+				out = sample;
+			}
+
+		private:
+			using Complex = std::complex<double>;
+
+			struct Section {
+				double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+				double z1 = 0, z2 = 0;
+			};
+
+			Section sections[count];
+			float lowerHz = 0, upperHz = 0, rippleDb = 0, sampleRate = 0;
+
+			static bool finite(float value) {
+				std::uint32_t bits;
+				std::memcpy(&bits, &value, sizeof(bits));
+				return (bits & 0x7f800000u) != 0x7f800000u;
+			}
+
+			static Complex digital(Complex value) { return (1.0 + value) / (1.0 - value); }
+
+			static std::array<Complex, 2> bandRoots(Complex value, double center, double width) {
+				const Complex half = value * (width * .5);
+				const Complex root = std::sqrt(half * half - center * center);
+				return { half + root, half - root };
+			}
+
+			static Section coefficients(Complex pole, Complex otherPole, Complex zero, Complex otherZero) {
+				return { 1, -(zero + otherZero).real(), (zero * otherZero).real(),
+					-(pole + otherPole).real(), (pole * otherPole).real() };
+			}
+
+			void configure(float lower, float upper, float ripple) {
+				const float rate = fs;
+				if (lower == lowerHz && upper == upperHz && ripple == rippleDb && rate == sampleRate)
+					return;
+				if (!finite(lower) || !finite(upper) || !finite(ripple) || !finite(rate)
+					|| lower <= 0 || lower >= rate * .5f
+					|| (band && (upper <= lower || upper >= rate * .5f)))
+					return;
+				if constexpr (FAMILY != 0)
+					if (ripple <= 0 || ripple > 120) return;
+
+				const double diagonal = 1 / root2.d;
+				Complex pole(-diagonal, diagonal);
+				if constexpr (ORDER == 1) pole = -1;
+				double passGain = 1;
+				if constexpr (FAMILY != 0) {
+					const double epsilon = std::sqrt(std::expm1(double(ripple) * std::log(10.0) / 10));
+					const double stretch = std::asinh(FAMILY == 1 ? 1 / epsilon : epsilon) / 2;
+					pole = Complex(-std::sinh(stretch), std::cosh(stretch)) * diagonal;
+					if constexpr (FAMILY == 1) passGain = std::pow(10.0, -double(ripple) / 20);
+					else pole = 1.0 / pole;
+				}
+
+				const double edge = std::tan(pi.d * lower / rate);
+				const Complex prototypeZero(0, root2.d);
+				Section next[count];
+				Complex point(1);
+				if constexpr (!band) {
+					const bool high = SHAPE == Response::HighPass;
+					const Complex p = digital(high ? edge / pole : edge * pole);
+					Complex z = high ? 1.0 : -1.0;
+					if constexpr (FAMILY == 2)
+						z = digital(high ? edge / prototypeZero : edge * prototypeZero);
+					next[0] = coefficients(p, ORDER == 1 ? Complex{} : std::conj(p),
+						z, ORDER == 1 ? Complex{} : std::conj(z));
+					if (high) point = -1;
+				}
+				else {
+					const bool reject = SHAPE == Response::BandReject;
+					const double high = std::tan(pi.d * upper / rate);
+					const double center = std::sqrt(edge * high);
+					const double width = high - edge;
+					const auto poles = bandRoots(reject ? 1.0 / pole : pole, center, width);
+					const auto zeros = bandRoots(reject ? 1.0 / prototypeZero : prototypeZero, center, width);
+					for (int i = 0; i < count; i++) {
+						const Complex p = digital(poles[i]);
+						const Complex other = ORDER == 1 ? digital(poles[1]) : std::conj(p);
+						Complex z = reject ? digital(Complex(0, center)) : Complex(1);
+						Complex second = reject ? std::conj(z) : Complex(-1);
+						if constexpr (FAMILY == 2) {
+							z = digital(zeros[i]);
+							second = std::conj(z);
+						}
+						next[i] = coefficients(p, other, z, second);
+					}
+					if (!reject) point = digital(Complex(0, center));
+				}
+
+				// Normalise each section at the pass-band reference frequency.
+				const Complex delay = 1.0 / point;
+				const Complex delay2 = delay * delay;
+				for (auto& section : next) {
+					if (std::abs(section.a2) >= 1 || 1 + section.a1 + section.a2 <= 0
+						|| 1 - section.a1 + section.a2 <= 0) return;
+					const double gain = std::abs(1.0 + section.a1 * delay + section.a2 * delay2)
+						/ std::abs(section.b0 + section.b1 * delay + section.b2 * delay2);
+					if (!(gain > 0) || !(gain <= std::numeric_limits<double>::max())) return;
+					section.b0 *= gain;
+					section.b1 *= gain;
+					section.b2 *= gain;
+				}
+				next[0].b0 *= passGain;
+				next[0].b1 *= passGain;
+				next[0].b2 *= passGain;
+				for (int i = 0; i < count; i++) {
+					next[i].z1 = sections[i].z1;
+					next[i].z2 = sections[i].z2;
+					sections[i] = next[i];
+				}
+				lowerHz = lower;
+				upperHz = upper;
+				rippleDb = ripple;
+				sampleRate = rate;
+			}
+		};
+	}
+	/// @endcond
+
+
 	/// Common audio filters.
 	namespace Filters {
 
@@ -6018,7 +7288,7 @@ namespace klang {
 
 			void set(param r) override { this->r = r; }
 
-			void process() {
+			void process() override {
 				out = in - z + r * out;
 				z = in;
 			}
@@ -6402,7 +7672,7 @@ namespace klang {
 		}
 		//		}
 
-		/// One-pole Butterworth filter.
+		/// Butterworth filters with a maximally flat passband.
 		namespace Butterworth {
 			/// Low-pass filter (LPF).
 			template<int ORDER>
@@ -6437,6 +7707,36 @@ namespace klang {
 					a2 = a0.inv * (1.f - a);
 				}
 			};
+
+			/// High-pass Butterworth filter for prototype order 1 or 2.
+			template<int ORDER>
+			struct HPF : detail::PrototypeFilter<0, ORDER, detail::Response::HighPass> {};
+
+			/// Band-pass Butterworth filter for prototype order 1 or 2.
+			template<int ORDER>
+			struct BPF : detail::PrototypeFilter<0, ORDER, detail::Response::BandPass> {};
+
+			/// Band-reject Butterworth filter for prototype order 1 or 2.
+			template<int ORDER>
+			struct BRF : detail::PrototypeFilter<0, ORDER, detail::Response::BandReject> {};
+		};
+
+		/// Chebyshev filters selected by type, with a second-order low-pass prototype.
+		template<int TYPE>
+		struct Chebyshev {
+			static_assert(TYPE == 1 || TYPE == 2, "Chebyshev type must be 1 or 2");
+
+			/// Low-pass Chebyshev response.
+			struct LPF : detail::PrototypeFilter<TYPE, 2, detail::Response::LowPass> {};
+
+			/// High-pass Chebyshev response.
+			struct HPF : detail::PrototypeFilter<TYPE, 2, detail::Response::HighPass> {};
+
+			/// Band-pass Chebyshev response.
+			struct BPF : detail::PrototypeFilter<TYPE, 2, detail::Response::BandPass> {};
+
+			/// Band-reject Chebyshev response.
+			struct BRF : detail::PrototypeFilter<TYPE, 2, detail::Response::BandReject> {};
 		};
 	}
 
@@ -6774,6 +8074,7 @@ namespace klang {
 		using namespace klang;
 
 		using namespace Generators::Fast;
+		using namespace Generators::OSM;
 		using namespace Modifiers;
 		using namespace Filters;
 		using namespace Filters::Biquad;

@@ -2,19 +2,23 @@
 #include <klang.h>
 using namespace klang::optimised;
 
+signal cubic(signal in){ return in * in; }
+
 struct FM : Synth {
 
 	struct FMNote : public Note {
 		Sine carrier;
 		Sine modulator;
 		ADSR adsr;
-		param f0;
+		Envelope env;
+		param fc;
 
 		event on(Pitch pitch, Amplitude velocity) {
-			f0 = pitch -> Frequency;
+			fc = pitch -> Frequency;
 			carrier.reset();
 			modulator.reset();
-			adsr(0.001, 0, 1, 0.25);
+			adsr(0.1, 0, 1, 0.25);
+			env = { { 0, 0.1 }, { 3, 1} };
 		}
 
 		event off(Amplitude velocity) {
@@ -22,11 +26,11 @@ struct FM : Synth {
 		}
 
 		void process() {
-			param mod_rate = controls[0] * f0;
-			param mod_depth = controls[1] * f0;
-			
-			signal mod = modulator(mod_rate) * mod_depth;
-			carrier(f0 + mod) * adsr >> out;
+			param mod_rate = controls[0] * fc;
+			param mod_depth = (env) * controls[1] * mod_rate;
+
+			signal mod = modulator(mod_rate) * mod_depth + fc;
+			carrier(mod) * adsr >> out;
 
 			if (adsr.finished())
 				stop();
@@ -36,7 +40,7 @@ struct FM : Synth {
 	// Initialise plugin (called once at startup)
 	FM() {
 		controls = {
-			Dial("Rate", 0.01, 3, 0.5),
+			Dial("Rate", 0.01, 10, 0.5),
 			Dial("Depth", 0, 10, 0.5),
 		};
 

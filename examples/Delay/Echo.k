@@ -3,22 +3,23 @@
 using namespace klang::optimised;
 
 struct Echo : Effect {
-	Delay<192000> delay;
+	Delay<0> delay;
 
 	// Initialise plugin (called once at startup)
 	Echo() {
-		controls = { 
+		controls = {
 			Dial("Delay", 0.0, 1.0, 0.5),
 			Dial("Gain", 0.0, 1.0, 0.5),
 		};
+		delay.resize(fs);
 	}
 
 	// Apply processing (called once per sample)
 	void process() {
 		param time = controls[0] * fs;
 		param gain = controls[1];
-		
-		in >> delay;
+
 		in + delay(time) * gain >> out;
+		out >> delay;
 	}
 };

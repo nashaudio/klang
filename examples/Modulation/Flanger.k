@@ -6,10 +6,11 @@ struct Flanger : Effect {
 
 	Delay<192000> delay;
 	Triangle lfo;
+	Noise noise;
 
 	// Initialise plugin (called once at startup)
 	Flanger() {
-		controls = { 
+		controls = {
 			Dial("Mod Rate", 0.1, 1.0, 0.75),
 			Dial("Mod Depth", 0.1, 5.0, 1.5),
 		};
@@ -19,7 +20,9 @@ struct Flanger : Effect {
 	void process() {
 		param rate = controls[0];
 		param depth = controls[1] / 1000.f;
-		
+
+		in = in * 0.5 + noise * 0.1;
+
 		signal mod = lfo(rate) * depth + depth;
 		in + (in >> delay)(mod * fs) >> out;
 	}
